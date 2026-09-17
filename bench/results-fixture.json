@@ -1,0 +1,82 @@
+{
+  "goal": "Search for 'invoice automation' in the search box and submit the search. Then open the guide whose title mentions automation.",
+  "outcome": "done",
+  "url_after": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#result-automation",
+  "wall_ms": 2033.6527909967117,
+  "summary": {
+    "steps": 4,
+    "wall_ms": 2033.7,
+    "perceive_ms": {
+      "p50": 0.0
+    },
+    "decide_ms": {
+      "p50": 277.0,
+      "p95": 613.2
+    },
+    "act_ms": {
+      "p50": 30.3,
+      "p95": 578.1
+    },
+    "total_ms": {
+      "p50": 307.3,
+      "p95": 1197.5,
+      "min": 253.4
+    },
+    "steps_per_sec_p50": 3.25,
+    "steps_per_sec_excluding_cold_start": 3.63
+  },
+  "steps": [
+    {
+      "n": 1,
+      "action": "type_text",
+      "detail": "type 'invoice automation' -> verify 0.94",
+      "confidence": 0.63,
+      "satisfied": 0.06,
+      "elements": 28,
+      "changed": false,
+      "perceive_ms": 6.166917002701666,
+      "decide_ms": 613.2116250009858,
+      "act_ms": 578.0877080032951,
+      "total_ms": 1197.4980829982087
+    },
+    {
+      "n": 2,
+      "action": "click",
+      "detail": "click [11] 'Search' at (377,184)",
+      "confidence": 0.54,
+      "satisfied": 0.07,
+      "elements": 28,
+      "changed": true,
+      "perceive_ms": 0.0,
+      "decide_ms": 268.54020899918396,
+      "act_ms": 6.655999997747131,
+      "total_ms": 275.21454200177686
+    },
+    {
+      "n": 3,
+      "action": "click",
+      "detail": "click [12] 'invoice automation \u2014 Automation guide' at (470,265)",
+      "confidence": 0.99,
+      "satisfied": 0.12,
+      "elements": 27,
+      "changed": true,
+      "perceive_ms": 0.0,
+      "decide_ms": 276.9991660024971,
+      "act_ms": 30.318582998006605,
+      "total_ms": 307.33983300160617
+    },
+    {
+      "n": 4,
+      "action": "done",
+      "detail": "done",
+      "confidence": 0.86,
+      "satisfied": 0.76,
+      "elements": 27,
+      "changed": false,
+      "perceive_ms": 0.0,
+      "decide_ms": 253.3523329984746,
+      "act_ms": 0.0018749997252598405,
+      "total_ms": 253.3763329993235
+    }
+  ]
+}

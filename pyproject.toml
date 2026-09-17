@@ -24,6 +24,7 @@ dependencies = [
     "pyobjc-framework-ApplicationServices==12.2.2",
     "pyobjc-framework-Quartz==12.2.2",
     "typesafe-sdk==0.6.0",
+    "websocket-client==1.9.0",
 ]
 
 [project.urls]
