@@ -1,0 +1,323 @@
+==============================================================================
+STATE  (sent as `state`)
+==============================================================================
+{
+  "goal": "Search for 'invoice automation' in the search box and submit the search. Then open the guide whose title mentions automation.",
+  "page": {
+    "url": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html",
+    "title": "Acme Internal Portal \u2014 Dashboard",
+    "viewport": "1440x813"
+  },
+  "text_to_type": "invoice automation",
+  "previous_actions": [],
+  "elements": [
+    {
+      "i": 0,
+      "tag": "a",
+      "text": "Acme",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#home",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 1,
+      "tag": "a",
+      "text": "Products",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#products",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 2,
+      "tag": "a",
+      "text": "Pricing",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#pricing",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 3,
+      "tag": "a",
+      "text": "Docs",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#docs",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 4,
+      "tag": "a",
+      "text": "Support",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#support",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 5,
+      "tag": "a",
+      "text": "Status",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#status",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 6,
+      "tag": "a",
+      "text": "Sign in",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#signin",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 7,
+      "tag": "a",
+      "text": "Dashboard",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#dashboard",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 8,
+      "tag": "a",
+      "text": "Billing",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#billing",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 9,
+      "tag": "a",
+      "text": "Reports",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#reports",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 10,
+      "tag": "input",
+      "text": "Search invoices, customers, PO numbers",
+      "href": null,
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 11,
+      "tag": "button",
+      "text": "Search",
+      "href": null,
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 12,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-1",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 13,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-2",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 14,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-3",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 15,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-4",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 16,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-5",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 17,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-6",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 18,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-7",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 19,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-8",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 20,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-9",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 21,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-10",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 22,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-11",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 23,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-12",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 24,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-13",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 25,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-14",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 26,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-15",
+      "visible": true,
+      "covered": false
+    },
+    {
+      "i": 27,
+      "tag": "a",
+      "text": "View",
+      "href": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#inv-16",
+      "visible": true,
+      "covered": false
+    }
+  ],
+  "known_sites": null
+}
+
+==============================================================================
+QUESTION kind  (Choice criteria)
+==============================================================================
+{
+  "click": "Click one of the on-screen elements. This is how you follow a link, press a button, open a menu, or select a tab. Choose the element in the element question.",
+  "type_text": "Type free text into the focused or specified text field \u2014 a search box, a form input, a username. Only valid when a text field needs content.",
+  "press_enter": "Press Return to submit the form or field that currently has focus.",
+  "navigate": "Load a specific URL in this tab. Not for clicking an on-screen link: use click for that.",
+  "press_escape": "Press Escape to dismiss a dialog, popup, or dropdown.",
+  "scroll_down": "Scroll down to reveal content below the fold.",
+  "scroll_up": "Scroll up.",
+  "back": "Go back to the previous page in this tab's history.",
+  "wait": "Nothing to do yet; the page is still loading or settling.",
+  "done": "The goal is already achieved on this page.",
+  "none": "Nothing on this page can make progress toward the goal."
+}
+
+==============================================================================
+QUESTION element  (Choice criteria)
+==============================================================================
+{
+  "0": "<a> 'Acme' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "1": "<a> 'Products' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "2": "<a> 'Pricing' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "3": "<a> 'Docs' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "4": "<a> 'Support' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "5": "<a> 'Status' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "6": "<a> 'Sign in' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "7": "<a> 'Dashboard' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "8": "<a> 'Billing' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "9": "<a> 'Reports' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "10": "<input> 'Search invoices, customers, PO numbers'",
+  "11": "<button> 'Search'",
+  "12": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "13": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "14": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "15": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "16": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "17": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "18": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "19": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "20": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "21": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "22": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "23": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "24": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "25": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "26": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#",
+  "27": "<a> 'View' file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#"
+}
+
+==============================================================================
+ELEMENTS  (28 of 46 candidates on screen; 18 below the fold, scroll_y=0)
+==============================================================================
+[  0]    38,   24   36x20   a        'Acme'
+[  1]   103,   24   58x20   a        'Products'
+[  2]   173,   24   45x20   a        'Pricing'
+[  3]   230,   24   33x20   a        'Docs'
+[  4]   290,   24   52x20   a        'Support'
+[  5]   355,   24   41x20   a        'Status'
+[  6]   415,   24   44x20   a        'Sign in'
+[  7]    55,   78   70x17   a        'Dashboard'
+[  8]   126,   78   39x17   a        'Billing'
+[  9]   186,   78   50x17   a        'Reports'
+[ 10]   180,  184  320x34   input    'Search invoices, customers, PO numbers'
+[ 11]   377,  184   58x34   button   'Search'
+[ 12]   829,  316   31x17   a        'View'
+[ 13]   829,  350   31x17   a        'View'
+[ 14]   829,  383   31x17   a        'View'
+[ 15]   829,  416   31x17   a        'View'
+[ 16]   829,  450   31x17   a        'View'
+[ 17]   829,  483   31x17   a        'View'
+[ 18]   829,  516   31x17   a        'View'
+[ 19]   829,  549   31x17   a        'View'
+[ 20]   829,  583   31x17   a        'View'
+[ 21]   829,  616   31x17   a        'View'
+[ 22]   829,  649   31x17   a        'View'
+[ 23]   829,  683   31x17   a        'View'
+[ 24]   829,  716   31x17   a        'View'
+[ 25]   829,  749   31x17   a        'View'
+[ 26]   829,  783   31x17   a        'View'
+[ 27]   829,  816   31x17   a        'View'

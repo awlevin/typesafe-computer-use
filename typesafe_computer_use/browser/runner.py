@@ -335,7 +335,6 @@ def run_goal(
                 "steps": [asdict(s) for s in result.steps],
             }
         )
-        runfolder.log(f"run folder: {runfolder.root}")
     return result
 
 
