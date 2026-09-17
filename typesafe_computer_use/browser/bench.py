@@ -292,7 +292,21 @@ def _ensure_key() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="bench", description=__doc__)
+    ap = argparse.ArgumentParser(
+        prog="clicker-bench",
+        description=(
+            "Browser-only computer-use benchmarks: DOM perception vs the OCR path, the "
+            "end-to-end step loop, and offline replay of a saved step."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  clicker-bench perception --url https://news.ycombinator.com\n"
+            "  clicker-bench perception --fixture --n 8\n"
+            "  clicker-bench loop --fixture --runs bench/example-run\n"
+            "  clicker-bench replay --run bench/example-run/<ts> --step 2"
+        ),
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("perception", help="DOM vs OCR perception, same page")
