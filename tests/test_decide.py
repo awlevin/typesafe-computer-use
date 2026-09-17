@@ -36,5 +36,5 @@ def test_item_criteria_and_state_carry_region_and_dates(screen, make_item):
     state = base_state("buy the thing", screen, items, ["opened https://example.com/"])
     assert state["goal"] == "buy the thing"
     assert state["previous_actions"] == ["opened https://example.com/"]
-    assert state["screen_text_in_reading_order"][1]["when"].startswith("near a line dated")
+    assert state["screen_items_in_reading_order"][1]["when"].startswith("near a line dated")
     assert "today" in state["now"]

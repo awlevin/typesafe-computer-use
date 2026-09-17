@@ -11,9 +11,10 @@ from pathlib import Path
 
 from . import config, macos
 from .actions import Context
-from .perception import capture, ocr
-from .report import annotate, render_payload
+from .perception import capture, perceive
+from .report import annotate, ax_count, render_payload
 from .runner import RunConfig, run
+from .timing import format_timing
 from .writer import make_writer
 
 DOTENV = Path.cwd() / ".env"
@@ -94,15 +95,20 @@ def inspect(argv: list[str] | None = None) -> None:
     print("capture")
 
     browser = config.browser()
-    screen = capture(browser=browser)
-    items = ocr(screen, config.MAX_OPTIONS, args.goal)
+    timing: dict[str, float] = {}
+    screen = capture(browser=browser, timing=timing)
+    items = perceive(screen, config.MAX_OPTIONS, args.goal, timing)
     annotated = args.out / "annotated.png"
     text = args.out / "state.txt"
     screen.image.save(args.out / "raw.png")
     annotate(screen, items, chosen="", out=annotated)
     text.write_text(render_payload(args.goal, screen, items, [], browser, config.email()))
 
-    print(f"app={screen.app!r} url={screen.url!r} blocks={len(items)} field={screen.field.role if screen.field else None}")
+    print(
+        f"app={screen.app!r} url={screen.url!r} items={len(items)} ax={ax_count(items)} "
+        f"field={screen.field.role if screen.field else None}"
+    )
+    print(format_timing(timing))
     print(f"  {annotated}\n  {text}")
     if not args.no_open:
         subprocess.run(["open", str(annotated)], check=False)

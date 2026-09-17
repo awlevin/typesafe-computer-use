@@ -12,10 +12,11 @@ from typesafe_sdk import TypeSafeClient
 from . import macos
 from .actions import Context, is_noop, perform
 from .config import DEFAULT_DELAY, DEFAULT_MIN_CONFIDENCE, DEFAULT_STEPS, MAX_OPTIONS
-from .decide import decide
-from .models import Abort
-from .perception import capture, ocr
-from .report import Log, annotate, render_payload, top
+from .decide import Decision, decide
+from .models import Abort, Item, Screen
+from .perception import capture, perceive
+from .report import Log, annotate, ax_count, render_payload, top
+from .timing import format_timing, phase, summarize
 
 MAX_CONSECUTIVE_NOOPS = 2
 
@@ -40,6 +41,7 @@ class RunConfig:
 @dataclass
 class RunState:
     history: list[str] = field(default_factory=list)
+    timings: list[dict[str, float]] = field(default_factory=list)
     consecutive_noops: int = 0
     last_url: str | None = None
     outcome: str = "completed"
@@ -74,6 +76,7 @@ def run(cfg: RunConfig, ctx_factory) -> RunState:
             "steps_taken": len(state.history),
             "outcome": state.outcome,
             "seconds": round(time.time() - started, 1),
+            "timing": summarize(state.timings),
             "history": state.history,
             "config": {k: str(v) for k, v in asdict(cfg).items()},
         }
@@ -84,42 +87,25 @@ def run(cfg: RunConfig, ctx_factory) -> RunState:
 
 def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log) -> bool:
     macos.check_abort()
-    screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser)
-    items = ocr(screen, MAX_OPTIONS, cfg.goal)
+    timing: dict[str, float] = {}
+    started = time.perf_counter()
+    with phase(timing, "capture"):
+        screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser, timing)
+    items = perceive(screen, MAX_OPTIONS, cfg.goal, timing)
     prefix = cfg.out / f"step-{step:02d}"
     screen.image.save(prefix.with_name(prefix.name + "-raw.png"))
     prefix.with_name(prefix.name + "-payload.txt").write_text(
         render_payload(cfg.goal, screen, items, state.history, ctx.browser, ctx.email)
     )
 
-    decision = decide(ctx.typesafe, cfg.goal, screen, items, state.history, ctx.browser, ctx.email)
+    with phase(timing, "decide"):
+        decision = decide(ctx.typesafe, cfg.goal, screen, items, state.history, ctx.browser, ctx.email)
     by_index = {str(it.index): it for it in items}
     annotate(screen, items, decision.chosen, prefix.with_suffix(".png"))
-    prefix.with_name(prefix.name + "-answers.json").write_text(
-        json.dumps(
-            {
-                "kind": decision.kind.choice,
-                "kind_confidence": decision.kind.confidence,
-                "kind_probabilities": decision.kind.probabilities,
-                "item": decision.item.choice if decision.item else None,
-                "item_confidence": decision.item.confidence if decision.item else None,
-                "item_probabilities": decision.item.probabilities if decision.item else None,
-                "site": decision.site.choice,
-                "site_probabilities": decision.site.probabilities,
-                "chosen": decision.chosen,
-                "confidence": decision.confidence,
-                "items": [asdict(it) for it in items],
-                "field": asdict(screen.field) if screen.field else None,
-                "app": screen.app,
-                "url": screen.url,
-            },
-            indent=2,
-        )
-    )
 
     field_desc = f" field={screen.field.role}:{screen.field.label!r}" if screen.field else ""
     log(
-        f"\nstep {step}: app={screen.app!r}{field_desc} url={screen.url!r} items={len(items)} "
+        f"\nstep {step}: app={screen.app!r}{field_desc} url={screen.url!r} items={len(items)} ax={ax_count(items)} "
         f"kind={decision.kind.choice} ({decision.kind.confidence:.2f}) site={decision.site.choice}"
     )
     for key, p in top(decision.kind, 4):
@@ -128,8 +114,33 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
         log(f"  item ({decision.item.confidence:.2f}):")
         for key, p in top(decision.item, 4):
             log(f"  {p:5.2f}  [{key}] {by_index[key].text!r}")
-    log(f"  files: {prefix.name}-raw.png, {prefix.name}.png, {prefix.name}-payload.txt, {prefix.name}-answers.json")
 
+    keep_going = resolve(cfg, ctx, state, screen, items, decision, timing, log)
+    timing.setdefault("act", 0.0)
+    timing["total"] = round(time.perf_counter() - started, 3)
+    state.timings.append(timing)
+
+    prefix.with_name(prefix.name + "-answers.json").write_text(json.dumps(answers(decision, screen, items, timing), indent=2))
+    log(f"  files: {prefix.name}-raw.png, {prefix.name}.png, {prefix.name}-payload.txt, {prefix.name}-answers.json")
+    log(format_timing(timing))
+
+    if not keep_going:
+        return False
+    macos.sleep_watching(cfg.delay)
+    return True
+
+
+def resolve(
+    cfg: RunConfig,
+    ctx: Context,
+    state: RunState,
+    screen: Screen,
+    items: list[Item],
+    decision: Decision,
+    timing: dict[str, float],
+    log: Log,
+) -> bool:
+    """Apply the stop rules, then the action. True to keep looping."""
     if decision.stops:
         log(f"  model says {decision.kind.choice!r}; stopping")
         return False
@@ -140,7 +151,8 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
         log(f"  would do: {decision.chosen}. dry run (pass --act without --image to drive the machine)")
         return False
 
-    what = perform(decision, screen, items, ctx)
+    with phase(timing, "act"):
+        what = perform(decision, screen, items, ctx)
     repeated = bool(state.history) and state.history[-1] == what and screen.url == state.last_url
     state.last_url = screen.url
     state.history.append(what)
@@ -153,5 +165,25 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
             return False
     else:
         state.consecutive_noops = 0
-    macos.sleep_watching(cfg.delay)
     return True
+
+
+def answers(decision: Decision, screen: Screen, items: list[Item], timing: dict[str, float]) -> dict:
+    """What the classifier returned for this step, plus what it cost."""
+    return {
+        "kind": decision.kind.choice,
+        "kind_confidence": decision.kind.confidence,
+        "kind_probabilities": decision.kind.probabilities,
+        "item": decision.item.choice if decision.item else None,
+        "item_confidence": decision.item.confidence if decision.item else None,
+        "item_probabilities": decision.item.probabilities if decision.item else None,
+        "site": decision.site.choice,
+        "site_probabilities": decision.site.probabilities,
+        "chosen": decision.chosen,
+        "confidence": decision.confidence,
+        "timing": timing,
+        "items": [asdict(it) for it in items],
+        "field": screen.field.record() if screen.field else None,
+        "app": screen.app,
+        "url": screen.url,
+    }

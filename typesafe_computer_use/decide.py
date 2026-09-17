@@ -49,9 +49,14 @@ def kind_criteria(browser: str, email: str | None) -> dict[str, str]:
 
 
 def item_criteria(screen: Screen, items: list[Item]) -> dict[str, str]:
+    """Each item as one line. A role prefix marks the ones the app itself declared."""
     hints = date_hints(items, screen)
     return {
-        str(it.index): f"{it.text!r} ({screen.region(it)}{'; ' + hints[it.index] if it.index in hints else ''})" for it in items
+        str(it.index): (
+            f"{it.role + ' ' if it.from_ax and it.role else ''}{it.text!r} "
+            f"({screen.region(it)}{'; ' + hints[it.index] if it.index in hints else ''})"
+        )
+        for it in items
     }
 
 
@@ -68,11 +73,12 @@ def base_state(goal: str, screen: Screen, items: list[Item], history: list[str])
         "browser_active_tab_url": screen.url,
         "focused_field": screen.field.summary() if screen.field else None,
         "previous_actions": history[-8:],
-        "screen_text_in_reading_order": [
+        "screen_items_in_reading_order": [
             {
                 "i": it.index,
                 "text": it.text,
                 "where": screen.region(it),
+                **({"role": it.role} if it.role else {}),
                 **({"when": hints[it.index]} if it.index in hints else {}),
             }
             for it in items
@@ -119,7 +125,11 @@ def decide(
     }
     if items:
         questions["item"] = Choice(
-            instructions="If clicking an on-screen item is the right move, which item?",
+            instructions=(
+                "If clicking an on-screen item is the right move, which item? Items marked with a "
+                "role come from the app's accessibility tree and are real controls; plain items are "
+                "text read from the screen."
+            ),
             criteria=item_criteria(screen, items),
         )
     answers = client.system_one(state=base_state(goal, screen, items, history), questions=questions).answers

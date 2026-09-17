@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from pathlib import Path
 
 from PIL import ImageDraw, ImageFont
@@ -32,8 +31,12 @@ def top(answer, n: int = 5) -> list[tuple[str, float]]:
     return sorted(answer.probabilities.items(), key=lambda kv: -kv[1])[:n]
 
 
+def ax_count(items: list[Item]) -> int:
+    return sum(1 for it in items if it.from_ax)
+
+
 def render_payload(goal: str, screen: Screen, items: list[Item], history: list[str], browser: str, email: str | None) -> str:
-    """Exactly what goes to TypeSafe for this screen, plus a table of every OCR block."""
+    """Exactly what goes to TypeSafe for this screen, plus a table of every item."""
     parts = [
         RULE,
         "STATE  (sent as `state`)",
@@ -56,22 +59,24 @@ def render_payload(goal: str, screen: Screen, items: list[Item], history: list[s
         json.dumps(site_criteria(), indent=2),
         "",
         RULE,
-        f"OCR BLOCKS  ({len(items)} after merge/filter; pixel boxes on the {screen.image.width}x{screen.image.height} capture, scale {screen.scale:g})",
+        f"ITEMS  ({len(items)} after merge/filter, {ax_count(items)} from the accessibility tree; "
+        f"pixel boxes on the {screen.image.width}x{screen.image.height} capture, scale {screen.scale:g})",
         RULE,
     ]
     for it in items:
         cx, cy = screen.to_points(it)
         parts.append(
-            f"[{it.index:3d}] conf={it.ocr_confidence:.2f} box=({it.x1:.0f},{it.y1:.0f})-({it.x2:.0f},{it.y2:.0f}) "
+            f"[{it.index:3d}] src={it.source:6} role={it.role or '-':8} conf={it.ocr_confidence:.2f} "
+            f"box=({it.x1:.0f},{it.y1:.0f})-({it.x2:.0f},{it.y2:.0f}) "
             f"click_pt=({cx:.0f},{cy:.0f}) {screen.region(it):13} {it.text!r}"
         )
     if screen.field:
-        parts += ["", "FOCUSED FIELD", json.dumps(asdict(screen.field), indent=2)]
+        parts += ["", "FOCUSED FIELD", json.dumps(screen.field.record(), indent=2)]
     return "\n".join(parts) + "\n"
 
 
 def annotate(screen: Screen, items: list[Item], chosen: str, out: Path) -> None:
-    """Blue boxes for OCR blocks, red for the chosen one, green for the focused field."""
+    """Blue boxes for OCR blocks, orange for accessibility controls, red for the chosen one, green for the focused field."""
     image = screen.image.copy()
     draw = ImageDraw.Draw(image)
     try:
@@ -80,7 +85,7 @@ def annotate(screen: Screen, items: list[Item], chosen: str, out: Path) -> None:
         font = ImageFont.load_default()
     for it in items:
         hit = str(it.index) == chosen
-        color = (255, 0, 0) if hit else (0, 160, 255)
+        color = (255, 0, 0) if hit else (255, 140, 0) if it.from_ax else (0, 160, 255)
         draw.rectangle((it.x1, it.y1, it.x2, it.y2), outline=color, width=3 if hit else 1)
         draw.text((it.x1, max(0, it.y1 - 12 * screen.scale)), str(it.index), fill=color, font=font)
     f = screen.field

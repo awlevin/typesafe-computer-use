@@ -11,7 +11,7 @@ from typesafe_sdk import TypeSafeClient
 from . import macos
 from .config import SITES
 from .decide import Decision, verify_typed
-from .models import Item, Screen
+from .models import Field, Item, Screen
 from .writer import compose_text, compose_url
 
 VERIFY_THRESHOLD = 0.5
@@ -36,13 +36,44 @@ def perform(decision: Decision, screen: Screen, items: list[Item], ctx: Context)
     key = decision.chosen
     by_index = {str(it.index): it for it in items}
     if key in by_index:
-        item = by_index[key]
-        macos.click_at(screen.to_points(item))
-        return f"clicked {item.text!r}"
+        return click_item(by_index[key], screen)
     handler = _HANDLERS.get(key)
     if handler is None:
         raise ValueError(f"unknown action {key!r}")
     return handler(decision, screen, items, ctx)
+
+
+def click_item(item: Item, screen: Screen) -> str:
+    """Press an item the app declared through the accessibility tree; click the pixel under it otherwise.
+
+    A press goes to the control itself, so it lands even when the center of the box is covered by
+    a sticky header, a cookie banner, or a tooltip. An element that refuses still has a location.
+    """
+    ref = screen.ax_refs.get(item.index)
+    if ref is not None and macos.ax_press(ref):
+        return f"pressed {item.text!r} via accessibility"
+    macos.click_at(screen.to_points(item))
+    if ref is None:
+        return f"clicked {item.text!r}"
+    return f"clicked {item.text!r} (accessibility press did not take)"
+
+
+def fill_field(field: Field, text: str) -> str:
+    """Put text in the focused field, by value if the element accepts one and keystrokes otherwise.
+
+    Setting the value is one message instead of one per character, and it cannot be stolen by a
+    page that moves the focus mid-word. It is also widely ignored, so the value is read back and
+    only a field that really holds the text counts. Returns which path ran, for the history.
+    """
+    ref = field.ref
+    if ref is not None:
+        macos.ax_focus(ref)
+        if macos.ax_set_value(ref, text):
+            back = macos.ax_value(ref)
+            if back is not None and back.endswith(text):
+                return "via accessibility"
+    macos.type_text(text)
+    return "via keystrokes"
 
 
 def _switch_to_browser(decision, screen, items, ctx: Context) -> str:
@@ -63,8 +94,8 @@ def _open_site(decision: Decision, screen, items, ctx: Context) -> str:
 def _type_email(decision, screen: Screen, items, ctx: Context) -> str:
     if not (screen.field and screen.field.is_text):
         return "type_email refused: no text field is focused"
-    macos.type_text(ctx.email or "")
-    return "typed email"
+    how = fill_field(screen.field, ctx.email or "")
+    return f"typed email {how}"
 
 
 def _type_text(decision, screen: Screen, items, ctx: Context) -> str:
@@ -75,13 +106,13 @@ def _type_text(decision, screen: Screen, items, ctx: Context) -> str:
     text = compose_text(ctx.writer, ctx.goal, screen, items, ctx.history)
     if not text:
         return "type_text refused: writer declined to fill this field"
-    macos.type_text(text)
+    how = fill_field(screen.field, text)
     time.sleep(0.3)
     p = verify_typed(ctx.typesafe, ctx.goal, screen.field, text, macos.focused_field())
     if p < VERIFY_THRESHOLD:
         macos.clear_field()
-        return f"typed {text!r} into {screen.field.label!r} but verification failed ({p:.2f}); cleared it"
-    return f"typed {text!r} into {screen.field.label!r} (verified {p:.2f})"
+        return f"typed {text!r} into {screen.field.label!r} {how} but verification failed ({p:.2f}); cleared it"
+    return f"typed {text!r} into {screen.field.label!r} {how} (verified {p:.2f})"
 
 
 def _key(name: str, description: str):
