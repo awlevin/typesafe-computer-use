@@ -1,0 +1,87 @@
+{
+  "goal": "Search for 'invoice automation' in the search box and submit the search. Then open the guide whose title mentions automation.",
+  "outcome": "done",
+  "url": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html",
+  "url_after": "file:///Users/admin/projects/typesafe-computer-use/bench/fixture.html#result-automation",
+  "wall_ms": 2375.3273749971413,
+  "summary": {
+    "steps": 4,
+    "wall_ms": 2375.3,
+    "perceive_ms": {
+      "p50": 0.0
+    },
+    "decide_ms": {
+      "p50": 351.4,
+      "p95": 718.5
+    },
+    "act_ms": {
+      "p50": 68.3,
+      "p95": 632.9
+    },
+    "total_ms": {
+      "p50": 361.4,
+      "p95": 1359.7,
+      "min": 302.0
+    },
+    "steps_per_sec_p50": 2.77,
+    "steps_per_sec_excluding_cold_start": 2.84
+  },
+  "steps": [
+    {
+      "n": 1,
+      "action": "type_text",
+      "detail": "type 'invoice automation' -> verify 0.95",
+      "confidence": 0.61,
+      "satisfied": 0.05,
+      "elements": 28,
+      "changed": false,
+      "perceive_ms": 5.99629199859919,
+      "decide_ms": 718.5247919987887,
+      "act_ms": 632.8746250001132,
+      "total_ms": 1359.7496669972315,
+      "text_source": ""
+    },
+    {
+      "n": 2,
+      "action": "click",
+      "detail": "click [11] 'Search' at (377,184)",
+      "confidence": 0.54,
+      "satisfied": 0.08,
+      "elements": 28,
+      "changed": true,
+      "perceive_ms": 0.0,
+      "decide_ms": 280.92820799793117,
+      "act_ms": 68.33679099509027,
+      "total_ms": 351.8607080040965,
+      "text_source": ""
+    },
+    {
+      "n": 3,
+      "action": "click",
+      "detail": "click [12] 'invoice automation \u2014 Automation guide' at (470,265)",
+      "confidence": 0.99,
+      "satisfied": 0.12,
+      "elements": 27,
+      "changed": true,
+      "perceive_ms": 0.0,
+      "decide_ms": 351.41775000374764,
+      "act_ms": 9.09420799871441,
+      "total_ms": 361.4013749975129,
+      "text_source": ""
+    },
+    {
+      "n": 4,
+      "action": "done",
+      "detail": "done",
+      "confidence": 0.9,
+      "satisfied": 0.74,
+      "elements": 27,
+      "changed": false,
+      "perceive_ms": 0.0,
+      "decide_ms": 299.4179159941268,
+      "act_ms": 0.0030840019462630153,
+      "total_ms": 301.97204100113595,
+      "text_source": ""
+    }
+  ]
+}
