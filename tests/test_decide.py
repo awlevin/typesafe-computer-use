@@ -93,3 +93,11 @@ def test_item_criteria_and_state_carry_region_and_dates(screen, make_item):
     assert state["previous_actions"] == ["opened https://example.com/"]
     assert state["screen_items_in_reading_order"][1]["when"].startswith("near a line dated")
     assert "today" in state["now"]
+
+
+def test_a_control_parked_far_off_the_display_still_gets_a_region(screen, make_item):
+    above = make_item(0, "note row", x1=100, y1=-98_000, x2=400, y2=-97_970)
+    below = make_item(1, "scrolled link", x1=3_000, y1=5_000, x2=3_400, y2=5_030)
+
+    assert screen.region(above) == "top-left"
+    assert screen.region(below) == "bottom-right"
