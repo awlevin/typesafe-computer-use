@@ -28,6 +28,22 @@ def make_writer() -> anthropic.Anthropic | None:
 ANSWER_IMAGE_EDGE = 1568  # the longest edge a vision model reads without shrinking the image itself
 
 
+def _strip_fences(raw: str) -> str:
+    """GLM-compatible output: the endpoint ignores output_config, so the model may wrap
+    its JSON in ```json fences or prepend chatter. Peel all of that to find the object."""
+    s = raw.strip()
+    if s.startswith("```"):  # ```json ... ``` or bare ``` ... ```
+        s = s.split("```", 2)[1] if s.count("```") >= 2 else s.strip("`")
+        if s.startswith("json"):
+            s = s[4:]
+        s = s.strip()
+    start = s.find("{")
+    end = s.rfind("}")
+    if start != -1 and end > start:
+        s = s[start : end + 1]
+    return s
+
+
 def _structured(
     writer: anthropic.Anthropic,
     system: str,
@@ -40,24 +56,34 @@ def _structured(
     content: list[dict] = [{"type": "text", "text": json.dumps(packet)}]
     if image is not None:
         content.insert(0, _image_block(image))
+    # GLM's Anthropic-compatible endpoint ignores output_config (verified: the schema is
+    # silently dropped) and enables thinking by default, which eats the token budget.
+    # Spell the schema out in the system prompt instead, and disable thinking.
+    schema = {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+    kwargs: dict = {}
+    base_url = str(getattr(writer, "base_url", ""))
+    if "bigmodel" in base_url or "zhipu" in base_url:
+        system = (
+            f"{system}\n\nAnswer with ONLY a JSON object matching this schema, no prose, no "
+            f"markdown fences: {json.dumps(schema)}"
+        )
+        kwargs["thinking"] = {"type": "disabled"}
+    else:
+        kwargs["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
     response = writer.messages.create(
         model=model or writer_model(),
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": content}],
-        output_config={
-            "format": {
-                "type": "json_schema",
-                "schema": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": list(properties),
-                    "additionalProperties": False,
-                },
-            }
-        },
+        **kwargs,
     )
-    return json.loads("".join(b.text for b in response.content if b.type == "text"))
+    raw = "".join(b.text for b in response.content if b.type == "text").strip()
+    return json.loads(_strip_fences(raw))
 
 
 def _image_block(image: Image.Image) -> dict:

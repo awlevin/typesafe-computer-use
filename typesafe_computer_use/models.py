@@ -138,11 +138,18 @@ class Screen:
         return self.image.width / self.scale, self.image.height / self.scale
 
     def region(self, item: Item) -> str:
+        # AX elements can report giant frames that start far above the viewport
+        # (a long Chromium page), so a center may lie outside the capture. Clamp
+        # both ways: min() alone only guards the positive overflow.
         cx, cy = item.center
-        col = ["left", "center", "right"][min(2, int(3 * cx / self.image.width))]
-        row = ["top", "middle", "bottom"][min(2, int(3 * cy / self.image.height))]
+        col = ["left", "center", "right"][min(2, max(0, int(3 * cx / self.image.width)))]
+        row = ["top", "middle", "bottom"][min(2, max(0, int(3 * cy / self.image.height)))]
         return f"{row}-{col}"
 
     def to_points(self, item: Item) -> tuple[float, float]:
+        # Same clamp for the click target: never hand Quartz a point off-screen.
         cx, cy = item.center
-        return cx / self.scale, cy / self.scale
+        w_pt, h_pt = self.size_pt
+        x = min(max(cx / self.scale, 0.0), max(0.0, w_pt - 1))
+        y = min(max(cy / self.scale, 0.0), max(0.0, h_pt - 1))
+        return x, y
