@@ -138,9 +138,14 @@ class Screen:
         return self.image.width / self.scale, self.image.height / self.scale
 
     def region(self, item: Item) -> str:
+        """A coarse cell for the item, clamped both ways.
+
+        Frames lie: Chrome and Notes report nodes thousands of points off the capture, so an index
+        computed from one lands outside the three rows. The cell is only ever a hint.
+        """
         cx, cy = item.center
-        col = ["left", "center", "right"][min(2, int(3 * cx / self.image.width))]
-        row = ["top", "middle", "bottom"][min(2, int(3 * cy / self.image.height))]
+        col = ["left", "center", "right"][max(0, min(2, int(3 * cx / self.image.width)))]
+        row = ["top", "middle", "bottom"][max(0, min(2, int(3 * cy / self.image.height)))]
         return f"{row}-{col}"
 
     def to_points(self, item: Item) -> tuple[float, float]:

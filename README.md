@@ -63,8 +63,24 @@ cp .env.example .env     # fill in the keys
 | `ANTHROPIC_API_KEY` | no | `type_text`, writer-proposed URLs, and the final answer |
 | `CLICKER_EMAIL` | no | enables the `type_email` action |
 | `CLICKER_BROWSER` | no | defaults to `Google Chrome` |
+| `CLICKER_WRITER_BASE_URL` | no | where the writer sends its requests; unset means `api.anthropic.com` |
 | `CLICKER_WRITER_MODEL` | no | defaults to `claude-haiku-4-5` |
 | `CLICKER_ANSWER_MODEL` | no | reads the last screen for the final answer; defaults to `claude-sonnet-5` |
+
+The writer speaks the Anthropic Messages API, so any endpoint that answers it works too: a LiteLLM
+or LiteLLM-style proxy, a GPU box, a local model. Point `CLICKER_WRITER_BASE_URL` at it and name
+whatever models it serves. The host root or the full `.../v1/messages` URL both work; the SDK adds
+the path itself. A schema is sent in the request *and* asked for in the prompt, so a proxy that
+ignores structured-output parameters still gets JSON (fences and preamble are tolerated on the way
+back). An endpoint you host yourself needs no key; `ANTHROPIC_API_KEY` is only required when the
+writer talks to Anthropic.
+
+```
+cp .env.example .env
+# CLICKER_WRITER_BASE_URL=http://localhost:8081/v1/messages
+# CLICKER_WRITER_MODEL=qwen3.8-flash-next
+# CLICKER_ANSWER_MODEL=qwen3.8-flash-next
+```
 
 Grant your terminal **Screen Recording** and **Accessibility** in System Settings >
 Privacy & Security. Without the first, captures are wallpaper. Without the second,
