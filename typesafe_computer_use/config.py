@@ -48,6 +48,24 @@ def writer_model() -> str:
     return os.environ.get("CLICKER_WRITER_MODEL", DEFAULT_WRITER_MODEL)
 
 
+def writer_base_url() -> str | None:
+    """Where the writer's Messages API lives: an Anthropic-compatible endpoint.
+
+    Set CLICKER_WRITER_BASE_URL (or ANTHROPIC_BASE_URL) to point the writer at a proxy or a
+    self-hosted model instead of api.anthropic.com. Either the host root or the full
+    .../v1/messages URL works; the SDK appends the path itself.
+    """
+    raw = os.environ.get("CLICKER_WRITER_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL")
+    if not raw:
+        return None
+    base = raw.strip().rstrip("/")
+    for suffix in ("/v1/messages", "/messages", "/v1"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base.rstrip("/") or None
+
+
 def answer_model() -> str:
     return os.environ.get("CLICKER_ANSWER_MODEL", DEFAULT_ANSWER_MODEL)
 

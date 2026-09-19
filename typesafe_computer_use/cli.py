@@ -15,7 +15,7 @@ from .perception import capture, perceive
 from .report import annotate, ax_count, render_payload
 from .runner import RunConfig, run
 from .timing import format_timing
-from .writer import make_writer
+from .writer import make_writer, provider
 
 DOTENV = Path.cwd() / ".env"
 
@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> None:
     writer = make_writer()
     if writer is None:
         print("writer disabled: no ANTHROPIC_API_KEY; type_text, writer-proposed URLs and the final answer need it")
+    else:
+        print(f"writer: {provider(writer)}")
 
     cfg = RunConfig(
         goal=args.goal,
