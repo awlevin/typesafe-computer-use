@@ -11,32 +11,44 @@ def answer(choice, confidence, probabilities=None):
 
 
 def test_decision_click_uses_item_and_min_confidence():
-    d = Decision(kind=answer("click_item", 0.9), item=answer("12", 0.6), site=answer("none", 1.0))
+    d = Decision(kind=answer("click_item", 0.9), item=answer("12", 0.6), site=answer("none", 1.0), app=answer("outlook", 1.0))
     assert d.clicking and d.chosen == "12" and d.confidence == 0.6 and not d.stops
 
 
 def test_decision_fixed_action_ignores_item():
-    d = Decision(kind=answer("use_browser", 0.8), item=answer("3", 0.1), site=answer("github", 0.9))
+    d = Decision(kind=answer("use_browser", 0.8), item=answer("3", 0.1), site=answer("github", 0.9), app=answer("outlook", 1.0))
     assert not d.clicking and d.chosen == "use_browser" and d.confidence == 0.8
 
 
 def test_decision_use_browser_ignores_a_split_site_answer():
-    d = Decision(kind=answer("use_browser", 0.88), item=None, site=answer("other", 0.45))
+    d = Decision(kind=answer("use_browser", 0.88), item=None, site=answer("other", 0.45), app=answer("outlook", 1.0))
     assert d.chosen == "use_browser" and d.confidence == 0.88
 
 
 def test_decision_stops_on_done_or_none():
-    assert Decision(kind=answer("done", 0.9), item=None, site=answer("none", 1)).stops
-    assert Decision(kind=answer("none", 0.9), item=None, site=answer("none", 1)).stops
+    assert Decision(kind=answer("done", 0.9), item=None, site=answer("none", 1), app=answer("outlook", 1)).stops
+    assert Decision(kind=answer("none", 0.9), item=None, site=answer("none", 1), app=answer("outlook", 1)).stops
 
 
 def test_decision_press_offscreen_uses_the_offscreen_answer_and_min_confidence():
-    d = Decision(kind=answer("press_offscreen", 0.9), item=answer("3", 0.9), site=answer("none", 1.0), offscreen=answer("7", 0.5))
+    d = Decision(
+        kind=answer("press_offscreen", 0.9),
+        item=answer("3", 0.9),
+        site=answer("none", 1.0),
+        app=answer("outlook", 1.0),
+        offscreen=answer("7", 0.5),
+    )
     assert d.pressing_offscreen and not d.clicking and d.chosen == "offscreen:7" and d.confidence == 0.5
 
 
 def test_decision_ignores_an_offscreen_answer_for_any_other_kind():
-    d = Decision(kind=answer("click_item", 0.9), item=answer("3", 0.8), site=answer("none", 1.0), offscreen=answer("7", 0.1))
+    d = Decision(
+        kind=answer("click_item", 0.9),
+        item=answer("3", 0.8),
+        site=answer("none", 1.0),
+        app=answer("outlook", 1.0),
+        offscreen=answer("7", 0.1),
+    )
     assert not d.pressing_offscreen and d.chosen == "3" and d.confidence == 0.8
 
 

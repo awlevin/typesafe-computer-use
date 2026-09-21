@@ -8,8 +8,8 @@ from dataclasses import dataclass
 import anthropic
 from typesafe_sdk import TypeSafeClient
 
-from . import macos
-from .config import SITES
+from . import platform_adapter as macos
+from .config import APPS, SITES
 from .decide import OFFSCREEN_PREFIX, Decision, verify_typed
 from .models import Field, Item, Screen
 from .writer import compose_text, compose_url
@@ -118,6 +118,16 @@ def _use_browser(decision: Decision, screen, items, ctx: Context) -> str:
     return f"use_browser failed: opened {url} but {ctx.browser} did not come to the front"
 
 
+def _open_app(decision: Decision, screen, items, ctx: Context) -> str:
+    """Bring a desktop app forward, launching it first if the app answer names one not already running."""
+    app = APPS.get(decision.app.choice)
+    if app is None:
+        return "open_app refused: the app is outside the catalog"
+    if macos.open_app(app):
+        return f"opened {app}"
+    return f"open_app failed: {app} did not come to the front"
+
+
 def _type_email(decision, screen: Screen, items, ctx: Context) -> str:
     if not (screen.field and screen.field.is_text):
         return "type_email refused: no text field is focused"
@@ -160,6 +170,7 @@ def _scroll(lines: int, description: str):
 
 _HANDLERS = {
     "use_browser": _use_browser,
+    "open_app": _open_app,
     "type_email": _type_email,
     "type_text": _type_text,
     "press_enter": _key("return", "pressed Return"),

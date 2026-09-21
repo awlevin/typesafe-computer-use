@@ -27,12 +27,18 @@ SITES: dict[str, str] = {
     "typesafe_console": "https://console.typesafe.ai/",
 }
 
+# Desktop apps the classifier can bring forward or launch by name. Anything else needs to already
+# be running and visible to click, or be reachable as a website through the browser catalog above.
+APPS: dict[str, str] = {
+    "outlook": "Outlook",
+}
+
 
 def load_dotenv(path: Path) -> None:
     """Set KEY=VALUE lines from a .env file into the environment unless already set."""
     if not path.is_file():
         return
-    for raw in path.read_text().splitlines():
+    for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
