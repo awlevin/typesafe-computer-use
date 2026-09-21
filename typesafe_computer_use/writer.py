@@ -15,13 +15,43 @@ from .config import answer_model, writer_model
 from .dates import now_context
 from .models import Item, Screen
 from .perception import near_field
+from .structured_output import decode_json_object
+from .writer_backend import StructuredRequest, WriterBackend
 
 
-def make_writer() -> anthropic.Anthropic | None:
-    """A client, or None when no Anthropic credentials resolve (the SDK only checks on first request)."""
+class AnthropicWriterBackend:
+    def __init__(self, client: anthropic.Anthropic):
+        self.client = client
+
+    def generate(self, request: StructuredRequest) -> str:
+        content = [{"type": "text", "text": json.dumps(request.packet)}]
+        if request.image is not None:
+            content.insert(0, _image_block(request.image))
+        response = self.client.messages.create(
+            model=request.model,
+            max_tokens=request.max_tokens,
+            system=request.system,
+            messages=[{"role": "user", "content": content}],
+            output_config={
+                "format": {
+                    "type": "json_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": request.properties,
+                        "required": list(request.properties),
+                        "additionalProperties": False,
+                    },
+                }
+            },
+        )
+        return "".join(block.text for block in response.content if block.type == "text")
+
+
+def make_writer() -> WriterBackend | None:
+    """An Anthropic-backed writer, or None when no credentials resolve."""
     client = anthropic.Anthropic()
     if client.api_key or getattr(client, "auth_token", None):
-        return client
+        return AnthropicWriterBackend(client)
     return None
 
 
@@ -29,7 +59,7 @@ ANSWER_IMAGE_EDGE = 1568  # the longest edge a vision model reads without shrink
 
 
 def _structured(
-    writer: anthropic.Anthropic,
+    writer: WriterBackend,
     system: str,
     packet: dict,
     properties: dict,
@@ -37,27 +67,15 @@ def _structured(
     model: str | None = None,
     image: Image.Image | None = None,
 ) -> dict:
-    content: list[dict] = [{"type": "text", "text": json.dumps(packet)}]
-    if image is not None:
-        content.insert(0, _image_block(image))
-    response = writer.messages.create(
-        model=model or writer_model(),
-        max_tokens=max_tokens,
+    request = StructuredRequest(
         system=system,
-        messages=[{"role": "user", "content": content}],
-        output_config={
-            "format": {
-                "type": "json_schema",
-                "schema": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": list(properties),
-                    "additionalProperties": False,
-                },
-            }
-        },
+        packet=packet,
+        properties=properties,
+        max_tokens=max_tokens,
+        model=model or writer_model(),
+        image=image,
     )
-    return json.loads("".join(b.text for b in response.content if b.type == "text"))
+    return decode_json_object(writer.generate(request), properties)
 
 
 def _image_block(image: Image.Image) -> dict:
@@ -70,7 +88,7 @@ def _image_block(image: Image.Image) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}}
 
 
-def compose_text(writer: anthropic.Anthropic, goal: str, screen: Screen, items: list[Item], history: list[str]) -> str:
+def compose_text(writer: WriterBackend, goal: str, screen: Screen, items: list[Item], history: list[str]) -> str:
     """The exact string to type into the focused field. Empty means the writer declined."""
     packet = {
         "goal": goal,
@@ -101,7 +119,7 @@ def valid_url(url: str) -> bool:
     return parsed.scheme == "https" and "." in parsed.netloc and not any(ch.isspace() for ch in url)
 
 
-def compose_url(writer: anthropic.Anthropic, goal: str, history: list[str]) -> str:
+def compose_url(writer: WriterBackend, goal: str, history: list[str]) -> str:
     """The URL to open for this goal. Empty means no sensible site, or an invalid proposal."""
     data = _structured(
         writer,
@@ -124,7 +142,7 @@ class Answer:
 
 
 def compose_answer(
-    writer: anthropic.Anthropic, goal: str, screen: Screen, items: list[Item], history: list[str], stopped: str
+    writer: WriterBackend, goal: str, screen: Screen, items: list[Item], history: list[str], stopped: str
 ) -> Answer:
     """What to tell the user now that the run is over: the result when the screen holds it, where things stand when not.
 

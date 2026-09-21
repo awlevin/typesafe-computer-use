@@ -16,16 +16,15 @@ GOAL = "find the next upcoming bruno mars concert"
 
 
 class FakeWriter:
-    """Stands in for the Anthropic client: records each request and replies with one JSON text block."""
+    """Stands in for a provider-neutral writer backend."""
 
-    def __init__(self, reply: dict):
-        self.requests: list[dict] = []
-        self.messages = SimpleNamespace(create=self._create)
-        self._reply = reply
+    def __init__(self, reply: dict | str):
+        self.requests = []
+        self.reply = reply
 
-    def _create(self, **request):
+    def generate(self, request):
         self.requests.append(request)
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(self._reply))])
+        return self.reply if isinstance(self.reply, str) else json.dumps(self.reply)
 
 
 def context(writer=None) -> Context:
@@ -45,14 +44,12 @@ def test_the_answer_request_carries_the_capture_and_the_run(screen, make_item, m
 
     assert answer == Answer(text="Sep 19, 2026 in Miami.", achieved=True)
     request = fake.requests[0]
-    assert request["model"] == "answer-model"
-    image, text = request["messages"][0]["content"]
-    assert image["type"] == "image" and image["source"]["media_type"] == "image/png"
-    packet = json.loads(text["text"])
-    assert packet["goal"] == GOAL
-    assert packet["why_the_run_stopped"] == "the goal is achieved"
-    assert packet["actions_taken"] == ["clicked 'TOUR'"]
-    assert packet["screen_text_in_reading_order"] == ["SEP 19, 2026"]
+    assert request.model == "answer-model"
+    assert request.image is not None
+    assert request.packet["goal"] == GOAL
+    assert request.packet["why_the_run_stopped"] == "the goal is achieved"
+    assert request.packet["actions_taken"] == ["clicked 'TOUR'"]
+    assert request.packet["screen_text_in_reading_order"] == ["SEP 19, 2026"]
 
 
 def test_the_capture_is_shrunk_to_the_edge_the_model_reads_and_left_intact():
@@ -68,13 +65,13 @@ def test_the_capture_is_shrunk_to_the_edge_the_model_reads_and_left_intact():
 
 def test_requests_without_a_capture_stay_text_only_on_the_writer_model(monkeypatch):
     monkeypatch.setenv("CLICKER_WRITER_MODEL", "writer-model")
-    fake = FakeWriter({"ok": True, "url": "https://www.brunomars.com"})
+    fake = FakeWriter({"ok": True, "url": "https://www.brunomars.com", "reason": "open"})
 
     assert writer.compose_url(fake, GOAL, []) == "https://www.brunomars.com"
 
     request = fake.requests[0]
-    assert request["model"] == "writer-model"
-    assert [block["type"] for block in request["messages"][0]["content"]] == ["text"]
+    assert request.model == "writer-model"
+    assert request.image is None
 
 
 @pytest.mark.parametrize("outcome", ["dry run", "aborted (Ctrl-C)", "crashed"])
@@ -109,7 +106,7 @@ def test_the_last_capture_is_answered_from_when_nothing_acted_after_it(tmp_path,
     assert state.answer == Answer(text="Sep 19, 2026 in Miami.", achieved=True)
     assert "goal achieved" in lines[0] and "Sep 19, 2026 in Miami." in lines[0]
     assert not (tmp_path / "answer-raw.png").exists()
-    assert "already achieved" in json.loads(fake.requests[0]["messages"][0]["content"][1]["text"])["why_the_run_stopped"]
+    assert fake.requests[0].packet["why_the_run_stopped"] == "the classifier judged the goal already achieved on this screen"
 
 
 def test_the_screen_is_captured_again_when_an_action_made_the_last_capture_stale(tmp_path, screen, make_item, monkeypatch):
@@ -125,15 +122,15 @@ def test_the_screen_is_captured_again_when_an_action_made_the_last_capture_stale
     assert state.answer == Answer(text="No dates on screen.", achieved=False)
     assert "goal not achieved" in lines[0]
     assert (tmp_path / "answer-raw.png").exists()
-    assert json.loads(fake.requests[0]["messages"][0]["content"][1]["text"])["screen_text_in_reading_order"] == ["TICKETS"]
+    assert fake.requests[0].packet["screen_text_in_reading_order"] == ["TICKETS"]
 
 
 def test_a_writer_that_fails_costs_the_answer_and_not_the_run(tmp_path, screen):
-    def refuse(**request):
+    def refuse(request):
         raise anthropic.APIConnectionError(request=SimpleNamespace())  # the error only carries the request along
 
     fake = FakeWriter({})
-    fake.messages.create = refuse
+    fake.generate = refuse
     state = RunState(outcome="done", view=(screen, []))
     lines, log = logged()
 
