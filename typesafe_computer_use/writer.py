@@ -56,6 +56,10 @@ def _structured(
     content: list[dict] = [{"type": "text", "text": json.dumps(packet)}]
     if image is not None:
         content.insert(0, _image_block(image))
+    # A non-default endpoint often enables thinking by default, and thinking spends the same
+    # max_tokens budget: a 200-token call can come back with no text at all. Anthropic itself
+    # keeps thinking off unless asked, so the request only carries the flag off the default host.
+    kwargs: dict = {"thinking": {"type": "disabled"}} if not _is_default_provider(writer) else {}
     response = writer.messages.create(
         model=model or writer_model(),
         max_tokens=max_tokens,
@@ -64,8 +68,19 @@ def _structured(
         system=f"{system}\n\nAnswer with a single JSON object and nothing else, matching this schema:\n{json.dumps(schema)}",
         messages=[{"role": "user", "content": content}],
         output_config={"format": {"type": "json_schema", "schema": schema}},
+        **kwargs,
     )
     return parse_json("".join(b.text for b in response.content if b.type == "text"))
+
+
+def _is_default_provider(writer: anthropic.Anthropic) -> bool:
+    """Whether the writer still talks to api.anthropic.com, where defaults are known.
+
+    `getattr` because tests hand in fake writers; a fake without a base_url is treated as
+    the default so their recorded requests stay exactly what the tests expect.
+    """
+    base_url = getattr(writer, "base_url", None)
+    return base_url is None or "anthropic.com" in str(base_url)
 
 
 def parse_json(text: str) -> dict:

@@ -320,6 +320,22 @@ def off_display(frame: Frame | None, display_w_pt: float, display_h_pt: float) -
     return x >= display_w_pt or y >= display_h_pt or x + w <= 0 or y + h <= 0
 
 
+def center_on_display(frame: Frame | None, display_w_pt: float, display_h_pt: float) -> bool:
+    """Whether a frame's centre falls on the display. Chromium pages report a giant `shell` frame
+    that starts tens of thousands of points above the viewport yet crosses it, so `off_display`
+    alone lets it through as partially visible — and clicking it would aim far off the screen.
+    Such a frame cannot be pressed where it claims to be, so it belongs with the off-screen nodes.
+    A frameless or zero-size frame claims nothing (an application element, a closed menu), and its
+    centre is meaningless, so those stay as they were.
+    """
+    if frame is None:
+        return True
+    x, y, w, h = frame
+    if w <= 0 or h <= 0:
+        return True
+    return 0 <= x + w / 2 < display_w_pt and 0 <= y + h / 2 < display_h_pt
+
+
 def node_identity(node) -> object:
     """Accessibility elements hash by the element they wrap, so two fetches of one control compare
     equal; anything unhashable (a fake node in a test) falls back to object identity."""
@@ -404,7 +420,9 @@ def walk_actionable(
             if key in visited_keys:
                 continue
             visited_keys.add(key)
-        hidden = hidden or off_display(frame, display_w_pt, display_h_pt)
+        hidden = (
+            hidden or off_display(frame, display_w_pt, display_h_pt) or not center_on_display(frame, display_w_pt, display_h_pt)
+        )
         if hidden and len(offscreen) >= offscreen_cap:
             continue  # nothing left to collect down there, and it never counted on screen
         kids = list(children(node))

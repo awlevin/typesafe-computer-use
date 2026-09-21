@@ -85,3 +85,38 @@ def test_valid_url():
     assert not valid_url("https://localhost")
     assert not valid_url("https://www.cnn.com/a b")
     assert not valid_url("")
+
+
+def test_the_default_provider_is_left_to_its_own_thinking_default():
+    from types import SimpleNamespace
+
+    from typesafe_computer_use.writer import _is_default_provider
+
+    assert _is_default_provider(SimpleNamespace()) is True  # a fake without a base_url
+    assert _is_default_provider(SimpleNamespace(base_url=None)) is True
+    assert _is_default_provider(SimpleNamespace(base_url="https://api.anthropic.com")) is True
+
+
+def test_a_custom_endpoint_disables_thinking_so_it_cannot_eat_the_token_budget():
+    import json as _json
+    from types import SimpleNamespace
+
+    from typesafe_computer_use import writer as w
+
+    seen: list[dict] = []
+
+    class ProxyWriter:
+        base_url = "https://open.bigmodel.cn/api/anthropic"
+
+        def __init__(self):
+            self.messages = SimpleNamespace(create=self._create)
+
+        def _create(self, **request):
+            seen.append(request)
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text=_json.dumps({"ok": True, "url": "https://example.com"}))]
+            )
+
+    data = w.compose_url(ProxyWriter(), "open example", [])
+    assert data == "https://example.com"
+    assert seen[0]["thinking"] == {"type": "disabled"}
