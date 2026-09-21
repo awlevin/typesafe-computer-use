@@ -272,6 +272,16 @@ def test_plain_text_is_not_used_for_a_credential_field(screen):
     assert compose_text(PlainTextWriter(), "fill password", focused, [], []) == ""
 
 
+def test_malformed_structured_text_is_not_typed_into_a_field(screen):
+    class MalformedWriter:
+        def generate(self, request):
+            return '{"fill": false}'
+
+    focused = replace(screen, field=field())
+
+    assert compose_text(MalformedWriter(), "search", focused, [], []) == ""
+
+
 def test_the_field_record_leaves_the_element_out_so_a_run_can_be_written():
     record = field(ref=object(), value="hello").record()
     assert "ref" not in record and json.loads(json.dumps(record))["value"] == "hello"

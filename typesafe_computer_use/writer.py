@@ -129,7 +129,7 @@ def compose_text(writer: WriterBackend, goal: str, screen: Screen, items: list[I
         )
     except StructuredOutputError as error:
         if screen.field is None or not _sensitive_field(screen.field):
-            return error.raw.strip()
+            return _text_fallback(error.raw)
         return ""
     return data["text"].strip() if data["fill"] else ""
 
@@ -137,6 +137,15 @@ def compose_text(writer: WriterBackend, goal: str, screen: Screen, items: list[I
 def _sensitive_field(field) -> bool:
     details = f"{field.role} {field.label} {field.placeholder}".lower()
     return any(term in details for term in ("password", "credential", "token", "secret", "payment", "card", "cvv"))
+
+
+def _text_fallback(raw: str) -> str:
+    text = raw.strip()
+    if not text or text.lower() in {"true", "false", "null"}:
+        return ""
+    if text.startswith(("{", "[", "```")):
+        return ""
+    return text
 
 
 def valid_url(url: str) -> bool:
