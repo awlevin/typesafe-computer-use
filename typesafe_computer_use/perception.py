@@ -3,16 +3,42 @@
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import replace
 from pathlib import Path
 
-from ocrmac import ocrmac
 from PIL import Image, ImageChops, ImageStat
 
-from . import macos
+from . import platform_adapter as macos
 from .config import MAX_OPTIONS, MIN_OCR_CONFIDENCE
 from .models import AxNode, Box, Item, Screen
 from .timing import OCR_RECTS, OCR_REGION_PCT, phase
+
+RawLine = tuple[str, float, tuple[float, float, float, float]]
+
+if sys.platform == "darwin":
+    from ocrmac import ocrmac
+
+    def _ocr_raw(crop: Image.Image) -> list[RawLine]:
+        return ocrmac.OCR(crop, recognition_level="accurate").recognize(px=True)
+else:
+    import winocr
+
+    def _ocr_raw(crop: Image.Image) -> list[RawLine]:
+        """recognize_pil_sync returns plain dicts, not objects, and reports no per-line confidence."""
+        result = winocr.recognize_pil_sync(crop)
+        out: list[RawLine] = []
+        for line in result["lines"]:
+            rects = [w["bounding_rect"] for w in line["words"]]
+            if not rects:
+                continue
+            x1 = min(r["x"] for r in rects)
+            y1 = min(r["y"] for r in rects)
+            x2 = max(r["x"] + r["width"] for r in rects)
+            y2 = max(r["y"] + r["height"] for r in rects)
+            out.append((line["text"], 1.0, (x1, y1, x2, y2)))
+        return out
+
 
 Line = tuple[str, float, Box]
 ECHO_CHARS = 24
@@ -228,7 +254,7 @@ def ocr_crop(image: Image.Image, rect: Box) -> list[Line]:
     knows a crop happened."""
     x1, y1, x2, y2 = (round(v) for v in rect)
     crop = image if (x1, y1, x2, y2) == (0, 0, image.width, image.height) else image.crop((x1, y1, x2, y2))
-    raw = ocrmac.OCR(crop, recognition_level="accurate").recognize(px=True)
+    raw = _ocr_raw(crop)
     return [(text, conf, (b[0] + x1, b[1] + y1, b[2] + x1, b[3] + y1)) for text, conf, b in raw]
 
 

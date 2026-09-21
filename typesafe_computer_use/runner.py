@@ -10,7 +10,7 @@ from pathlib import Path
 import anthropic
 from typesafe_sdk import TypeSafeClient
 
-from . import macos
+from . import platform_adapter as macos
 from .actions import Context, is_noop, perform
 from .config import DEFAULT_DELAY, DEFAULT_MIN_CONFIDENCE, DEFAULT_STEPS, MAX_OPTIONS
 from .decide import Decision, decide, offscreen_records
@@ -98,7 +98,7 @@ def run(cfg: RunConfig, ctx_factory) -> RunState:
             "history": state.history,
             "config": {k: str(v) for k, v in asdict(cfg).items()},
         }
-        (cfg.out / "run.json").write_text(json.dumps(summary, indent=2))
+        (cfg.out / "run.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         log(f"run folder: {cfg.out}")
     return state
 
@@ -142,7 +142,7 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     prefix = cfg.out / f"step-{step:03d}"  # three digits, so a run of 100 steps still lists in order
     screen.image.save(prefix.with_name(prefix.name + "-raw.png"))
     prefix.with_name(prefix.name + "-payload.txt").write_text(
-        render_payload(cfg.goal, screen, items, state.history, ctx.browser, ctx.email)
+        render_payload(cfg.goal, screen, items, state.history, ctx.browser, ctx.email), encoding="utf-8"
     )
 
     with phase(timing, "decide"):
@@ -172,7 +172,9 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     timing["total"] = round(time.perf_counter() - started, 3)
     state.timings.append(timing)
 
-    prefix.with_name(prefix.name + "-answers.json").write_text(json.dumps(answers(decision, screen, items, timing), indent=2))
+    prefix.with_name(prefix.name + "-answers.json").write_text(
+        json.dumps(answers(decision, screen, items, timing), indent=2), encoding="utf-8"
+    )
     log(f"  files: {prefix.name}-raw.png, {prefix.name}.png, {prefix.name}-payload.txt, {prefix.name}-answers.json")
     log(format_timing(timing))
 

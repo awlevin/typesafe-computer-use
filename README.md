@@ -6,7 +6,7 @@
   <a href="https://github.com/awlevin/typesafe-computer-use/actions/workflows/ci.yaml"><img alt="CI" src="https://github.com/awlevin/typesafe-computer-use/actions/workflows/ci.yaml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white">
-  <img alt="macOS" src="https://img.shields.io/badge/platform-macOS-000000?logo=apple&logoColor=white">
+  <img alt="macOS and Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-000000">
   <a href="https://docs.typesafe.ai"><img alt="TypeSafe" src="https://img.shields.io/badge/decisions-TypeSafe%20jev-8b5cf6"></a>
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json"></a>
 </p>
@@ -48,7 +48,7 @@ reasoning the frontier model does for free has to be rebuilt here as determinist
 
 ## Install
 
-macOS 14 or newer, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/).
+macOS 14+ or Windows 10/11, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/).
 
 ```
 git clone https://github.com/awlevin/typesafe-computer-use
@@ -66,9 +66,25 @@ cp .env.example .env     # fill in the keys
 | `CLICKER_WRITER_MODEL` | no | defaults to `claude-haiku-4-5` |
 | `CLICKER_ANSWER_MODEL` | no | reads the last screen for the final answer; defaults to `claude-sonnet-5` |
 
-Grant your terminal **Screen Recording** and **Accessibility** in System Settings >
+`.env` lives at the repo root and is read by every entry point (`clicker`, `clicker-inspect`),
+so the keys work the same way on both platforms.
+
+**macOS**: grant your terminal **Screen Recording** and **Accessibility** in System Settings >
 Privacy & Security. Without the first, captures are wallpaper. Without the second,
 synthetic clicks are silently dropped, and `--act` refuses to start.
+
+**Windows**: `uv sync` pulls `winocr`, `uiautomation`, `pywin32`, and `pyautogui` instead of the
+macOS-only packages (see `pyproject.toml`'s `sys_platform` markers). Install an OCR language pack
+once, from an elevated PowerShell:
+
+```powershell
+Add-WindowsCapability -Online -Name "Language.OCR~~~en-US~0.0.1.0"
+```
+
+There is no Windows equivalent of the Screen Recording/Accessibility permission prompt; UI
+Automation and screen capture both work without one. Coverage of the accessibility tree still
+varies by app the same way it does on macOS — native Win32 apps expose it fully, Electron/Chromium
+apps need their own assistive-tech flag to expose one at all.
 
 ## Use
 
@@ -261,8 +277,10 @@ uv run clicker "same goal" --image runs/<ts>/step-003-raw.png --app "Google Chro
 
 ```
 typesafe_computer_use/
-  macos.py        the only module that touches Quartz, AX, AppleScript   (platform adapter)
-                  including the bounded walk for actionable elements
+  macos.py        the macOS platform adapter: Quartz, AX, AppleScript
+  windows.py      the Windows platform adapter: pywin32, UI Automation, pyautogui
+  ax_walk.py      the bounded accessibility-tree walk, shared by both adapters
+  platform_adapter.py   picks macos.py or windows.py by sys.platform at import time
   perception.py   capture, OCR, the read region and the changed-tile cache,
                   block merging, goal-echo filter, the accessibility item
                   source, and the merge of the two
@@ -278,9 +296,10 @@ tests/            pure logic: dates, merging, reading order, echo filter, config
                   decisions, the tree walk against a fake tree
 ```
 
-A Linux port replaces `macos.py` with xdotool and AT-SPI, and swaps Vision OCR for
-PaddleOCR or RapidOCR. The tree walk itself takes its children, attributes, and actions
-as callables, so only those three bindings change. Nothing else knows the platform.
+A Linux port replaces both platform adapters with one over xdotool and AT-SPI, and swaps Vision
+OCR / Windows.Media.Ocr for PaddleOCR or RapidOCR. The tree walk itself takes its children,
+attributes, and actions as callables, so only those three bindings change per platform. Nothing
+else knows which OS it is running on.
 
 ## Known limits
 

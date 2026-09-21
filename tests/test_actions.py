@@ -4,9 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from typesafe_computer_use import actions, macos
+from typesafe_computer_use import actions
 from typesafe_computer_use.actions import click_item, fill_field, press_offscreen
 from typesafe_computer_use.models import AxNode, Field, Item
+
+macos = actions.macos  # the platform adapter actions.py resolved at import time
 
 
 @pytest.fixture
