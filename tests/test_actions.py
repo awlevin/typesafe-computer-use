@@ -3,10 +3,14 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from dataclasses import replace
 
 from typesafe_computer_use import actions, macos
 from typesafe_computer_use.actions import click_item, fill_field, press_offscreen
 from typesafe_computer_use.models import AxNode, Field, Item
+from typesafe_computer_use.structured_output import StructuredOutputError
+from typesafe_computer_use.writer import compose_text
+from typesafe_computer_use.writer_backend import WriterError
 
 
 @pytest.fixture
@@ -149,6 +153,17 @@ def test_use_browser_refuses_when_the_writer_proposes_nothing(screen, browser, m
     assert actions.is_noop(refusal) and browser == []
 
 
+def test_use_browser_turns_writer_error_into_a_noop(screen, browser, monkeypatch):
+    def fail(*args):
+        raise WriterError("proxy unavailable")
+
+    monkeypatch.setattr(actions, "compose_url", fail)
+    refusal = actions.perform(browsing("other"), screen, [], context(object()))
+
+    assert refusal == "use_browser refused: writer failed (proxy unavailable)"
+    assert actions.is_noop(refusal) and browser == []
+
+
 def test_a_browser_that_does_not_come_to_the_front_is_a_no_op(screen, monkeypatch):
     monkeypatch.setattr(macos, "activate", lambda app: False)
     failure = actions.perform(browsing("none"), screen, [], context())
@@ -190,6 +205,61 @@ def test_typing_uses_keystrokes_when_there_is_no_element(calls, monkeypatch):
     monkeypatch.setattr(macos, "ax_set_value", lambda ref, text: pytest.fail("no element to write to"))
     assert fill_field(field(), "hello") == "via keystrokes"
     assert calls == [("type", "hello")]
+
+
+def test_type_text_turns_writer_error_into_a_noop(screen, calls, monkeypatch):
+    focused = replace(screen, field=field())
+
+    def fail(*args):
+        raise WriterError("proxy unavailable")
+
+    monkeypatch.setattr(actions, "compose_text", fail)
+    refusal = actions.perform(SimpleNamespace(chosen="type_text"), focused, [], context(object()))
+
+    assert refusal == "type_text refused: writer failed (proxy unavailable)"
+    assert actions.is_noop(refusal) and calls == []
+
+
+def test_plain_https_url_is_accepted(screen, browser):
+    class PlainUrlWriter:
+        def generate(self, request):
+            raise StructuredOutputError("invalid", "https://gemini.google.com/")
+
+    refusal = actions.perform(browsing("other"), screen, [], context(PlainUrlWriter()))
+
+    assert refusal == "opened https://gemini.google.com/"
+    assert browser == [("open", "Google Chrome", "https://gemini.google.com/")]
+
+
+def test_plain_http_url_is_rejected(screen, browser):
+    class PlainUrlWriter:
+        def generate(self, request):
+            raise StructuredOutputError("invalid", "http://example.com/")
+
+    refusal = actions.perform(browsing("other"), screen, [], context(PlainUrlWriter()))
+
+    assert refusal == "use_browser refused: the writer proposed no usable URL for this goal"
+    assert browser == []
+
+
+def test_plain_text_is_used_for_a_noncredential_field(screen):
+    class PlainTextWriter:
+        def generate(self, request):
+            raise StructuredOutputError("invalid", "latest Gemini models")
+
+    focused = replace(screen, field=field())
+
+    assert compose_text(PlainTextWriter(), "search", focused, [], []) == "latest Gemini models"
+
+
+def test_plain_text_is_not_used_for_a_credential_field(screen):
+    class PlainTextWriter:
+        def generate(self, request):
+            raise StructuredOutputError("invalid", "do not type this")
+
+    focused = replace(screen, field=replace(field(), label="Password"))
+
+    assert compose_text(PlainTextWriter(), "fill password", focused, [], []) == ""
 
 
 def test_the_field_record_leaves_the_element_out_so_a_run_can_be_written():

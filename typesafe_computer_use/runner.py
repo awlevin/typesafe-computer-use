@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import anthropic
+from openai import APIError as OpenAIAPIError
 from typesafe_sdk import TypeSafeClient
 
 from . import macos
@@ -19,6 +20,7 @@ from .perception import OcrCache, capture, perceive
 from .report import Log, annotate, ax_count, render_payload, top
 from .timing import format_timing, phase, summarize
 from .writer import Answer, compose_answer
+from .writer_backend import WriterError
 
 MAX_CONSECUTIVE_NOOPS = 2
 
@@ -124,7 +126,7 @@ def conclude(cfg: RunConfig, ctx: Context, state: RunState, log: Log) -> None:
     screen, items = state.view
     try:
         state.answer = compose_answer(ctx.writer, cfg.goal, screen, items, state.history, stopped)
-    except anthropic.APIError as e:
+    except (anthropic.APIError, OpenAIAPIError, WriterError) as e:
         log(f"\nno answer: the writer failed ({e})")
         return
     verdict = "goal achieved" if state.answer.achieved else "goal not achieved"

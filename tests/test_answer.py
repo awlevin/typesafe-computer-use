@@ -74,6 +74,14 @@ def test_requests_without_a_capture_stay_text_only_on_the_writer_model(monkeypat
     assert request.image is None
 
 
+def test_plain_final_answer_defaults_to_not_achieved(screen, make_item):
+    fake = FakeWriter("The page does not show the requested result.")
+
+    answer = compose_answer(fake, GOAL, screen, [make_item(0, "SEARCH")], [], "step limit")
+
+    assert answer == Answer(text="The page does not show the requested result.", achieved=False)
+
+
 @pytest.mark.parametrize("outcome", ["dry run", "aborted (Ctrl-C)", "crashed"])
 def test_a_run_that_has_nothing_to_report_asks_for_no_answer(outcome, tmp_path, screen):
     fake = FakeWriter({"achieved": True, "answer": "unused"})

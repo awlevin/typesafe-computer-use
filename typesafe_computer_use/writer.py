@@ -17,7 +17,7 @@ from .dates import now_context
 from .models import Item, Screen
 from .openai_writer import OpenAICompatibleWriterBackend
 from .perception import near_field
-from .structured_output import decode_json_object
+from .structured_output import StructuredOutputError, decode_json_object
 from .writer_backend import StructuredRequest, WriterBackend
 
 
@@ -113,19 +113,29 @@ def compose_text(writer: WriterBackend, goal: str, screen: Screen, items: list[I
         "text_near_field": near_field(screen, items),
         "all_screen_text": [it.text for it in items][:120],
     }
-    data = _structured(
-        writer,
-        system=(
-            "You fill in one text field on a user's screen. You receive the user's goal, recent "
-            "actions, the focused field's label and placeholder, and nearby screen text. Decide the "
-            "exact string to type. Never invent credentials, passwords, or personal data; for such "
-            "fields, or when the field should not be filled, set fill to false."
-        ),
-        packet=packet,
-        properties={"fill": {"type": "boolean"}, "text": {"type": "string"}, "reason": {"type": "string"}},
-        max_tokens=256,
-    )
+    try:
+        data = _structured(
+            writer,
+            system=(
+                "You fill in one text field on a user's screen. You receive the user's goal, recent "
+                "actions, the focused field's label and placeholder, and nearby screen text. Decide the "
+                "exact string to type. Never invent credentials, passwords, or personal data; for such "
+                "fields, or when the field should not be filled, set fill to false."
+            ),
+            packet=packet,
+            properties={"fill": {"type": "boolean"}, "text": {"type": "string"}, "reason": {"type": "string"}},
+            max_tokens=256,
+        )
+    except StructuredOutputError as error:
+        if screen.field is None or not _sensitive_field(screen.field):
+            return error.raw.strip()
+        return ""
     return data["text"].strip() if data["fill"] else ""
+
+
+def _sensitive_field(field) -> bool:
+    details = f"{field.role} {field.label} {field.placeholder}".lower()
+    return any(term in details for term in ("password", "credential", "token", "secret", "payment", "card", "cvv"))
 
 
 def valid_url(url: str) -> bool:
@@ -135,16 +145,20 @@ def valid_url(url: str) -> bool:
 
 def compose_url(writer: WriterBackend, goal: str, history: list[str]) -> str:
     """The URL to open for this goal. Empty means no sensible site, or an invalid proposal."""
-    data = _structured(
-        writer,
-        system=(
-            "Given a user's goal for their web browser, give the single best https URL to open first. "
-            "Prefer the site's homepage or the most direct public page. If no website is implied, set ok to false."
-        ),
-        packet={"goal": goal, "now": now_context(), "previous_actions": history[-8:]},
-        properties={"ok": {"type": "boolean"}, "url": {"type": "string"}, "reason": {"type": "string"}},
-        max_tokens=200,
-    )
+    try:
+        data = _structured(
+            writer,
+            system=(
+                "Given a user's goal for their web browser, give the single best https URL to open first. "
+                "Prefer the site's homepage or the most direct public page. If no website is implied, set ok to false."
+            ),
+            packet={"goal": goal, "now": now_context(), "previous_actions": history[-8:]},
+            properties={"ok": {"type": "boolean"}, "url": {"type": "string"}, "reason": {"type": "string"}},
+            max_tokens=200,
+        )
+    except StructuredOutputError as error:
+        candidate = error.raw.strip()
+        return candidate if valid_url(candidate) else ""
     url = data["url"].strip() if data["ok"] else ""
     return url if valid_url(url) else ""
 
@@ -172,23 +186,29 @@ def compose_answer(
         "browser_active_tab_url": screen.url,
         "screen_text_in_reading_order": [it.text for it in items],
     }
-    data = _structured(
-        writer,
-        system=(
-            "An agent drove a user's computer toward the user's goal and has now stopped. You receive "
-            "the goal, the actions it took, why it stopped, a capture of the screen as it is now, and "
-            "the text read from that screen. Tell the user the result. When the goal asks for "
-            "information, lead with that information, taken only from the screen: never from memory, "
-            "and never a guess. When the goal asks for something to be done, say whether the screen "
-            "shows it done. When the screen does not hold the result, say so plainly, then say what is "
-            "on screen and the one next step that would get there. Trust the capture over the text "
-            "where the two disagree. Plain text, no markdown, four sentences at most. Set achieved to "
-            "true only when the screen itself shows the goal reached."
-        ),
-        packet=packet,
-        properties={"achieved": {"type": "boolean"}, "answer": {"type": "string"}},
-        max_tokens=1024,
-        model=answer_model(),
-        image=screen.image,
-    )
+    try:
+        data = _structured(
+            writer,
+            system=(
+                "An agent drove a user's computer toward the user's goal and has now stopped. You receive "
+                "the goal, the actions it took, why it stopped, a capture of the screen as it is now, and "
+                "the text read from that screen. Tell the user the result. When the goal asks for "
+                "information, lead with that information, taken only from the screen: never from memory, "
+                "and never a guess. When the goal asks for something to be done, say whether the screen "
+                "shows it done. When the screen does not hold the result, say so plainly, then say what is "
+                "on screen and the one next step that would get there. Trust the capture over the text "
+                "where the two disagree. Plain text, no markdown, four sentences at most. Set achieved to "
+                "true only when the screen itself shows the goal reached."
+            ),
+            packet=packet,
+            properties={"achieved": {"type": "boolean"}, "answer": {"type": "string"}},
+            max_tokens=1024,
+            model=answer_model(),
+            image=screen.image,
+        )
+    except StructuredOutputError as error:
+        text = error.raw.strip()
+        if not text:
+            raise
+        return Answer(text=text, achieved=False)
     return Answer(text=data["answer"].strip(), achieved=data["achieved"])

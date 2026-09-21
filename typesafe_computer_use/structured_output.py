@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .writer_backend import WriterError
 
-class StructuredOutputError(ValueError):
+
+class StructuredOutputError(WriterError):
     def __init__(self, message: str, raw: str):
         super().__init__(message)
         self.raw = raw

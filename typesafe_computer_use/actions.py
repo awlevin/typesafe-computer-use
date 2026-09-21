@@ -13,6 +13,7 @@ from .config import SITES
 from .decide import OFFSCREEN_PREFIX, Decision, verify_typed
 from .models import Field, Item, Screen
 from .writer import compose_text, compose_url
+from .writer_backend import WriterError
 
 VERIFY_THRESHOLD = 0.5
 NOOP_MARKERS = ("refused", "failed", "waited")
@@ -110,7 +111,10 @@ def _use_browser(decision: Decision, screen, items, ctx: Context) -> str:
     if url is None:
         if ctx.writer is None:
             return "use_browser refused: the site is outside the catalog and no writer is available to propose a URL"
-        url = compose_url(ctx.writer, ctx.goal, ctx.history)
+        try:
+            url = compose_url(ctx.writer, ctx.goal, ctx.history)
+        except WriterError as error:
+            return f"use_browser refused: writer failed ({error})"
     if not url:
         return "use_browser refused: the writer proposed no usable URL for this goal"
     if macos.open_url(ctx.browser, url):
@@ -130,7 +134,10 @@ def _type_text(decision, screen: Screen, items, ctx: Context) -> str:
         return "type_text refused: no text field is focused"
     if ctx.writer is None:
         return "type_text refused: no writer available"
-    text = compose_text(ctx.writer, ctx.goal, screen, items, ctx.history)
+    try:
+        text = compose_text(ctx.writer, ctx.goal, screen, items, ctx.history)
+    except WriterError as error:
+        return f"type_text refused: writer failed ({error})"
     if not text:
         return "type_text refused: writer declined to fill this field"
     how = fill_field(screen.field, text)
