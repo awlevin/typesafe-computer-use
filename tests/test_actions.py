@@ -3,7 +3,6 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from dataclasses import replace
 
 from typesafe_computer_use import actions, macos
 from typesafe_computer_use.actions import click_item, fill_field, press_offscreen

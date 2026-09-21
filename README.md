@@ -12,9 +12,9 @@
 </p>
 
 **typesafe-computer-use** drives a Mac toward a goal you type in plain English, for about a
-fiftieth of a cent per step. It never sends a screenshot to a big model. Instead it
-reads the screen deterministically, asks a small classifier which action comes next,
-and only calls a writing model when a text field genuinely needs free text.
+fiftieth of a cent per step. It reads the screen deterministically, asks a small classifier
+which action comes next, and only calls a writing model when a text field genuinely needs
+free text or the final answer needs to read the stopped screen.
 
 ```
 clicker "go to techcrunch and take me to the checkout page for the cheapest tickets to their next upcoming event" --act
@@ -60,11 +60,34 @@ cp .env.example .env     # fill in the keys
 | variable | required | purpose |
 |---|---|---|
 | `TYPESAFE_API_KEY` | yes | every decision |
-| `ANTHROPIC_API_KEY` | no | `type_text`, writer-proposed URLs, and the final answer |
+| `CLICKER_WRITER_PROVIDER` | no | `anthropic` or `openai-compatible`; defaults to `anthropic` |
+| `ANTHROPIC_API_KEY` | no | credentials for the Anthropic writer |
+| `CLICKER_WRITER_API_KEY` | no | credentials for the OpenAI-compatible writer; falls back to `OPENAI_API_KEY` |
+| `CLICKER_WRITER_BASE_URL` | no | OpenAI-compatible API root; falls back to `OPENAI_BASE_URL` |
 | `CLICKER_EMAIL` | no | enables the `type_email` action |
 | `CLICKER_BROWSER` | no | defaults to `Google Chrome` |
-| `CLICKER_WRITER_MODEL` | no | defaults to `claude-haiku-4-5` |
+| `CLICKER_WRITER_MODEL` | no | defaults to `claude-haiku-4-5`; use `deepseek-v4.1-flash` for the local proxy |
 | `CLICKER_ANSWER_MODEL` | no | reads the last screen for the final answer; defaults to `claude-sonnet-5` |
+| `CLICKER_WRITER_VISION` | no | enables screenshot input; defaults to `true` |
+| `CLICKER_STRUCTURED_OUTPUT` | no | `auto`, `json_schema`, `json_object`, or `prompt`; defaults to `auto` |
+
+For a DeepSeek local proxy, put this in `.env`:
+
+```env
+CLICKER_WRITER_PROVIDER=openai-compatible
+CLICKER_WRITER_API_KEY=your-local-proxy-key
+CLICKER_WRITER_BASE_URL=http://127.0.0.1:8317/v1
+CLICKER_WRITER_MODEL=deepseek-v4.1-flash
+CLICKER_ANSWER_MODEL=deepseek-v4.1-flash
+CLICKER_WRITER_VISION=true
+CLICKER_STRUCTURED_OUTPUT=auto
+```
+
+The `/v1` suffix is included because the OpenAI SDK appends `/chat/completions` below
+the configured API root. If a proxy documents a different root, use its documented base URL.
+Vision is enabled by default for OpenAI-compatible writers. A confirmed image-compatibility
+error disables image input for the rest of the process and retries with OCR-only context.
+Structured output negotiation tries `json_schema`, then `json_object`, then prompt-only JSON.
 
 Grant your terminal **Screen Recording** and **Accessibility** in System Settings >
 Privacy & Security. Without the first, captures are wallpaper. Without the second,

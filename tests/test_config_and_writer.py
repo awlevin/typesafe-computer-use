@@ -8,7 +8,6 @@ from typesafe_computer_use.config import (
     load_dotenv,
     structured_output_mode,
     writer_api_key,
-    writer_base_url,
     writer_provider,
     writer_vision,
 )

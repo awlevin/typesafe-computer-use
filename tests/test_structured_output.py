@@ -2,7 +2,6 @@ import pytest
 
 from typesafe_computer_use.structured_output import StructuredOutputError, decode_json_object
 
-
 URL_PROPERTIES = {
     "ok": {"type": "boolean"},
     "url": {"type": "string"},

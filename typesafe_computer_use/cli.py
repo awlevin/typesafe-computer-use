@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit("this terminal lacks Accessibility permission; grant it in System Settings > Privacy & Security")
     writer = make_writer()
     if writer is None:
-        print("writer disabled: no ANTHROPIC_API_KEY; type_text, writer-proposed URLs and the final answer need it")
+        print("writer disabled: no writer API credentials configured; type_text, writer-proposed URLs and the final answer need it")
 
     cfg = RunConfig(
         goal=args.goal,
