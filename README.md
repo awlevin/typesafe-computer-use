@@ -139,15 +139,18 @@ the number of pixels, so the only real saving is reading less of the screen.
   background windows is noise to the decision. Clipping the strip to the window's width is
   what makes the crop pay on a full-height window. The cost: the clock and the menu extras
   to the right of the window go unread. They stay clickable through the accessibility tree.
-- **Reuse.** The capture is compared with the previous one at 1/8 scale, in 256 px tiles.
-  Unchanged tiles keep the lines they produced last step. The changed tiles are clustered
+- **Reuse.** The capture is compared with each region's last OCR-read image at 1/8 scale,
+  in 256 px tiles. A local pixel change can invalidate a tile even when most of it is
+  unchanged, so a short label or digit is not averaged away. Unchanged tiles keep their
+  lines and their reference pixels. The changed tiles are clustered
   into blobs, sides and corners counting as touching, and each blob becomes a rectangle
   read on its own. Scattered change is the ordinary case, a clock digit plus one repaint,
   and one rectangle around both would span the display. Each rectangle grows until no known
   line straddles its edge, because a crop through a line returns the half it can see; ones
   that meet after growing merge, and more than four merge by closest pair down to four.
   Past 60% changed tiles, past 60% of the region in summed rectangle area, or on an app
-  switch or a window move, the whole region is read instead.
+  switch or a window move, the whole region is read instead. A full read is also forced
+  after five reuse steps to bound staleness from changes too subtle for the thumbnail.
 
 The timing line says how much was read, and in how many pieces: `ocr 0.31s (22% of screen,
 2 rects)`. A replay (`--image`) always reads the whole image and never reuses, so an offline
@@ -217,7 +220,10 @@ small packet and a structured reply:
 - **`type_text`** receives the goal, recent actions, the focused field's label and
   placeholder, and the OCR lines near the field. It returns `{fill, text}`. Credential
   fields come back `fill: false` and nothing is typed. After typing, a Noul scores
-  whether the field now holds a sensible value. Under 0.5 the field is cleared.
+  whether the field now holds a sensible value. Under 0.5, the original field's previous
+  value is restored through its accessibility handle only if it still holds exactly the
+  text just written. If the handle is missing or its value has changed, recovery is skipped;
+  cleanup never sends Select All/Delete to whatever field has since gained focus.
 - **`use_browser`** with `site: other` receives the goal and returns `{ok, url}`.
   Code rejects anything that is not a clean https URL with a hostname.
 - **The answer**, once, when the loop stops itself. It receives the goal, every action

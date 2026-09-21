@@ -9,6 +9,11 @@ from typesafe_computer_use.actions import click_item, fill_field, press_offscree
 from typesafe_computer_use.models import AxNode, Field, Item
 
 
+@pytest.fixture(autouse=True)
+def no_live_abort_check(monkeypatch):
+    monkeypatch.setattr(macos, "check_abort", lambda: None)
+
+
 @pytest.fixture
 def calls(monkeypatch):
     """Every trip to the machine, recorded instead of made."""
@@ -195,3 +200,42 @@ def test_typing_uses_keystrokes_when_there_is_no_element(calls, monkeypatch):
 def test_the_field_record_leaves_the_element_out_so_a_run_can_be_written():
     record = field(ref=object(), value="hello").record()
     assert "ref" not in record and json.loads(json.dumps(record))["value"] == "hello"
+
+
+def test_failed_verification_restores_original_field_without_touching_new_focus(screen, monkeypatch):
+    original = field(ref=object(), value="previous query")
+    other = field(ref=object(), value="important draft")
+    values = {original.ref: "new query", other.ref: other.value}
+    monkeypatch.setattr(actions, "compose_text", lambda *a: "new query")
+    monkeypatch.setattr(actions, "fill_field", lambda *a: "via accessibility")
+    monkeypatch.setattr(actions.time, "sleep", lambda *a: None)
+    monkeypatch.setattr(macos, "focused_field", lambda: other)
+    monkeypatch.setattr(actions, "verify_typed", lambda *a: 0.0)
+    monkeypatch.setattr(macos, "ax_value", values.get)
+    monkeypatch.setattr(macos, "ax_set_value", lambda ref, text: values.__setitem__(ref, text) or True)
+    monkeypatch.setattr(macos, "clear_field", lambda: pytest.fail("must not clear the current focus"))
+
+    result = actions._type_text(None, replace(screen, field=original), [], context(object()))
+
+    assert "restored previous value" in result
+    assert values == {original.ref: original.value, other.ref: other.value}
+
+
+@pytest.mark.parametrize("current", [None, "user edited the value", "prefix new query"])
+def test_recovery_leaves_a_missing_or_changed_original_field_alone(current, monkeypatch):
+    monkeypatch.setattr(macos, "ax_value", lambda ref: current)
+    monkeypatch.setattr(macos, "ax_set_value", lambda *a: pytest.fail("not our value anymore"))
+    assert not actions.restore_field(field(ref=object()), "new query")
+
+
+def test_recovery_without_a_handle_never_uses_keyboard_input(monkeypatch):
+    monkeypatch.setattr(macos, "clear_field", lambda: pytest.fail("unknown target"))
+    monkeypatch.setattr(macos, "type_text", lambda *a: pytest.fail("unknown target"))
+    assert not actions.restore_field(field(), "new query")
+
+
+def test_refused_restore_has_no_keyboard_fallback(monkeypatch):
+    monkeypatch.setattr(macos, "ax_value", lambda ref: "new query")
+    monkeypatch.setattr(macos, "ax_set_value", lambda *a: False)
+    monkeypatch.setattr(macos, "clear_field", lambda: pytest.fail("must not clear the current focus"))
+    assert not actions.restore_field(field(ref=object()), "new query")

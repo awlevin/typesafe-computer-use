@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import anthropic
@@ -178,3 +179,37 @@ def test_an_action_makes_the_last_capture_stale(tmp_path, screen, monkeypatch):
 
     assert keep_going
     assert state.view is None
+
+
+def test_successful_scrolls_on_the_same_url_do_not_stall(tmp_path, screen, monkeypatch):
+    monkeypatch.setattr(runner, "perform", lambda *a: "scrolled down")
+    state = RunState()
+    cfg = RunConfig(goal=GOAL, out=tmp_path, act=True)
+    for color in ("red", "green", "blue", "white"):
+        current = replace(screen, image=Image.new("RGB", screen.image.size, color), url="https://example.com")
+        assert resolve(cfg, context(), state, current, [], decision("scroll_down"), {}, lambda _: None)
+    assert state.consecutive_noops == 0
+
+
+def test_repeated_actions_still_stop_when_the_view_does_not_change(tmp_path, screen, monkeypatch):
+    monkeypatch.setattr(runner, "perform", lambda *a: "scrolled down")
+    state = RunState()
+    cfg = RunConfig(goal=GOAL, out=tmp_path, act=True)
+    results = [resolve(cfg, context(), state, screen, [], decision("scroll_down"), {}, lambda _: None) for _ in range(3)]
+    assert results == [True, True, False]
+    assert state.outcome == "stalled"
+
+
+def test_accessibility_changes_count_as_progress_even_with_identical_pixels(screen, make_item):
+    before = (screen, [make_item(0, "page one")])
+    after = (screen, [make_item(0, "page two")])
+    assert not runner.same_view(before, after)
+
+
+def test_explicit_refusals_still_stop_the_run(tmp_path, screen, monkeypatch):
+    monkeypatch.setattr(runner, "perform", lambda *a: "type_text refused: no writer available")
+    state = RunState()
+    cfg = RunConfig(goal=GOAL, out=tmp_path, act=True)
+    assert resolve(cfg, context(), state, screen, [], decision("type_text"), {}, lambda _: None)
+    assert not resolve(cfg, context(), state, screen, [], decision("type_text"), {}, lambda _: None)
+    assert state.outcome == "stalled"

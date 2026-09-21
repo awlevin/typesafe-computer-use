@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import anthropic
+from PIL import ImageChops
 from typesafe_sdk import TypeSafeClient
 
 from . import macos
@@ -55,7 +56,7 @@ class RunState:
     history: list[str] = field(default_factory=list)
     timings: list[dict[str, float]] = field(default_factory=list)
     consecutive_noops: int = 0
-    last_url: str | None = None
+    last_view: tuple[Screen, list[Item]] | None = None  # observation before the previous action
     outcome: str = "crashed"  # every way out of the loop names its own; only an exception leaves this
     ocr_cache: OcrCache = field(default_factory=OcrCache)  # carries one step's OCR into the next
     view: tuple[Screen, list[Item]] | None = None  # the latest capture, until an action makes it stale
@@ -208,8 +209,8 @@ def resolve(
     with phase(timing, "act"):
         what = perform(decision, screen, items, ctx)
     state.view = None
-    repeated = bool(state.history) and state.history[-1] == what and screen.url == state.last_url
-    state.last_url = screen.url
+    repeated = bool(state.history) and state.history[-1] == what and same_view(state.last_view, (screen, items))
+    state.last_view = (screen, list(items))
     state.history.append(what)
     log(f"  did: {what}")
     if is_noop(what) or repeated:
@@ -221,6 +222,25 @@ def resolve(
     else:
         state.consecutive_noops = 0
     return True
+
+
+def same_view(before: tuple[Screen, list[Item]] | None, after: tuple[Screen, list[Item]]) -> bool:
+    """Repeated input is a stall only when both pixels and observed UI state stayed the same."""
+    if before is None:
+        return False
+    old, old_items = before
+    new, new_items = after
+    if (
+        old.app != new.app
+        or old.url != new.url
+        or old.window != new.window
+        or old.field != new.field
+        or old_items != new_items
+        or old.offscreen != new.offscreen
+        or old.image.size != new.image.size
+    ):
+        return False
+    return ImageChops.difference(old.image.convert("RGB"), new.image.convert("RGB")).getbbox() is None
 
 
 def answers(decision: Decision, screen: Screen, items: list[Item], timing: dict[str, float]) -> dict:

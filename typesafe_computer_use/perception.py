@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from ocrmac import ocrmac
-from PIL import Image, ImageChops, ImageStat
+from PIL import Image, ImageChops
 
 from . import macos
 from .config import MAX_OPTIONS, MIN_OCR_CONFIDENCE
@@ -26,7 +26,8 @@ MENU_BAR_PT = 40.0  # the strip above every window, which the app's own menus li
 REGION_MARGIN_PT = 8.0  # slack around the window, for the shadow and a clipped glyph
 THUMB_DIVISOR = 8  # the change detector works on a 1/8 scale grayscale copy
 TILE_PX = 256.0  # tile side in capture pixels
-TILE_DIFF = 6.0  # mean absolute 8-bit difference that counts a tile as changed
+TILE_DIFF = 6.0  # peak 8-bit thumbnail difference: small text changes must not be averaged away
+MAX_OCR_REUSE_STEPS = 5  # bound staleness even for changes lost in thumbnail reduction
 REOCR_FRACTION = 0.6  # above this share of changed tiles, reading the whole region is cheaper
 MAX_REOCR_RECTS = 4  # past this, the per-call overhead outweighs the pixels another rectangle saves
 
@@ -144,6 +145,7 @@ class OcrCache:
         self.region: Box | None = None
         self.thumb: Image.Image | None = None
         self.lines: list[Line] = []
+        self.steps_since_full_read = 0
 
     def reusable(self, screen: Screen, region: Box, thumb: Image.Image) -> bool:
         """Never across a different app, a moved or resized window, or a different read region."""
@@ -179,25 +181,32 @@ def ocr_lines(screen: Screen, cache: OcrCache | None = None) -> tuple[list[Line]
     thumb = thumbnail(screen.image)
     if not cache.reusable(screen, region, thumb):
         return _read_region(screen, region, thumb, cache), read_pct([region]), 0
+    cache.steps_since_full_read += 1
+    if cache.steps_since_full_read >= MAX_OCR_REUSE_STEPS:
+        return _read_region(screen, region, thumb, cache), read_pct([region]), 0
     tiles = tiles_in(region)
     changed = changed_tiles(thumb, cache.thumb, tiles)
     if len(changed) > REOCR_FRACTION * len(tiles):
         return _read_region(screen, region, thumb, cache), read_pct([region]), 0
     rects = reocr_rects(changed, region, cache.lines)
     if not rects:
-        cache.store(screen, region, thumb, cache.lines)
+        # Keep the baseline that produced the cached text so small changes can accumulate.
         return cache.lines, 0.0, 0
     if sum(area_of(rect) for rect in rects) > REOCR_FRACTION * area_of(region):
         return _read_region(screen, region, thumb, cache), read_pct([region]), 0
     fresh = [ln for rect in rects for ln in ocr_crop(screen.image, rect)]
     lines = merge_reocr(cache.lines, fresh, rects)
-    cache.store(screen, region, thumb, lines)
+    baseline = cache.thumb.copy()
+    for rect in rects:
+        baseline.paste(_patch(thumb, rect, THUMB_DIVISOR), (round(rect[0] / THUMB_DIVISOR), round(rect[1] / THUMB_DIVISOR)))
+    cache.store(screen, region, baseline, lines)
     return lines, read_pct(rects), len(rects)
 
 
 def _read_region(screen: Screen, region: Box, thumb: Image.Image, cache: OcrCache) -> list[Line]:
     lines = ocr_crop(screen.image, region)
     cache.store(screen, region, thumb, lines)
+    cache.steps_since_full_read = 0
     return lines
 
 
@@ -259,12 +268,12 @@ def tile_changed(
     divisor: int = THUMB_DIVISOR,
     threshold: float = TILE_DIFF,
 ) -> bool:
-    """True when the tile's mean absolute pixel difference clears the threshold. A tile whose patch
+    """True when any thumbnail pixel's difference clears the threshold. A tile whose patch
     cannot be compared counts as changed, so a doubt is always paid for with a re-read."""
     a, b = _patch(thumb, tile, divisor), _patch(previous, tile, divisor)
     if a.size != b.size or not a.width or not a.height:
         return True
-    return ImageStat.Stat(ImageChops.difference(a, b)).mean[0] > threshold
+    return ImageChops.difference(a, b).getextrema()[1] > threshold
 
 
 def _patch(thumb: Image.Image, tile: Box, divisor: int) -> Image.Image:

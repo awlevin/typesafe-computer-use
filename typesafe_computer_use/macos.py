@@ -58,25 +58,45 @@ def _post(event) -> None:
 
 
 def click_at(point: tuple[float, float]) -> None:
-    for kind in (Quartz.kCGEventMouseMoved, Quartz.kCGEventLeftMouseDown, Quartz.kCGEventLeftMouseUp):
-        _post(Quartz.CGEventCreateMouseEvent(None, kind, point, Quartz.kCGMouseButtonLeft))
+    # Check before moving: the synthetic move would otherwise erase a corner abort.
+    check_abort()
+    _post(Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, point, Quartz.kCGMouseButtonLeft))
+    check_abort()
+    try:
+        _post(Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseDown, point, Quartz.kCGMouseButtonLeft))
+    finally:
+        _post(Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseUp, point, Quartz.kCGMouseButtonLeft))
 
 
 def press(key: str, command: bool = False) -> None:
+    check_abort()
     code = KEYCODES[key]
-    for down in (True, False):
+
+    def send(down: bool) -> None:
         event = Quartz.CGEventCreateKeyboardEvent(None, code, down)
         if command:
             Quartz.CGEventSetFlags(event, Quartz.kCGEventFlagMaskCommand)
         _post(event)
 
+    try:
+        send(True)
+    finally:
+        send(False)
+
 
 def type_text(text: str) -> None:
     for ch in text:
-        for down in (True, False):
+        check_abort()
+
+        def send(down: bool, ch: str = ch) -> None:
             event = Quartz.CGEventCreateKeyboardEvent(None, 0, down)
             Quartz.CGEventKeyboardSetUnicodeString(event, len(ch), ch)
             _post(event)
+
+        try:
+            send(True)
+        finally:
+            send(False)
 
 
 def clear_field() -> None:
@@ -87,6 +107,7 @@ def clear_field() -> None:
 def scroll(lines: int) -> None:
     """Scroll events go to the view under the cursor, so park it over the frontmost window first."""
     center = frontmost_window_center()
+    check_abort()
     if center is not None:
         _post(Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, center, Quartz.kCGMouseButtonLeft))
     _post(Quartz.CGEventCreateScrollWheelEvent(None, Quartz.kCGScrollEventUnitLine, 1, lines))
@@ -117,18 +138,22 @@ def frontmost_pid() -> int:
 
 def activate(app: str, timeout: float = 3.0) -> bool:
     """Bring an app to the front and confirm it got there."""
+    check_abort()
     osascript(f'tell application "{app}" to activate')
     end = time.monotonic() + timeout
     while time.monotonic() < end:
+        check_abort()
         if frontmost_app() == app:
             return True
         time.sleep(0.1)
+    check_abort()
     osascript(f'tell application "System Events" to set frontmost of process "{app}" to true')
     time.sleep(0.3)
     return frontmost_app() == app
 
 
 def open_url(browser: str, url: str) -> bool:
+    check_abort()
     osascript(f'tell application "{browser}" to open location "{url}"')
     return activate(browser)
 
@@ -225,6 +250,7 @@ AX_PRESS = "AXPress"
 
 def ax_press(ref) -> bool:
     """Send AXPress to an element."""
+    check_abort()
     try:
         return AS.AXUIElementPerformAction(ref, AX_PRESS) == 0
     except Exception:
@@ -233,6 +259,7 @@ def ax_press(ref) -> bool:
 
 def ax_focus(ref) -> bool:
     """Give an element the keyboard focus."""
+    check_abort()
     try:
         return AS.AXUIElementSetAttributeValue(ref, AS.kAXFocusedAttribute, True) == 0
     except Exception:
@@ -241,6 +268,7 @@ def ax_focus(ref) -> bool:
 
 def ax_set_value(ref, text: str) -> bool:
     """Write an element's value. A read-only or unwilling element reports an error."""
+    check_abort()
     try:
         return AS.AXUIElementSetAttributeValue(ref, AS.kAXValueAttribute, text) == 0
     except Exception:

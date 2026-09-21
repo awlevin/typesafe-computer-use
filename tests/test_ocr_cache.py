@@ -318,3 +318,48 @@ def test_no_cache_always_reads_the_region(reads):
     ocr_lines(capture_of(), None)
     ocr_lines(capture_of(), None)
     assert reads == [(0, 0, 2048, 1024), (0, 0, 2048, 1024)]
+
+
+def test_a_small_high_contrast_change_is_read_again(reads):
+    cache = OcrCache()
+    ocr_lines(capture_of(), cache)
+    ocr_lines(capture_of(boxes=[(300, 300, 320, 320)]), cache)
+    assert len(reads) == 2
+
+
+def test_subthreshold_changes_accumulate_against_the_last_read_image(reads):
+    cache = OcrCache()
+    first = capture_of()
+    ocr_lines(first, cache)
+    for increase in (3, 6):
+        ocr_lines(replace(first, image=first.image.point(lambda v, increase=increase: v + increase)), cache)
+    assert len(reads) == 1
+    ocr_lines(replace(first, image=first.image.point(lambda v: v + 9)), cache)
+    assert len(reads) == 2
+
+
+def test_partial_refresh_preserves_the_baseline_for_unread_tiles(reads):
+    cache = OcrCache()
+    first = capture_of()
+    ocr_lines(first, cache)
+    after = first.image.point(lambda v: v + 3)
+    after.paste((255, 255, 255), (300, 300, 320, 320))
+    ocr_lines(replace(first, image=after), cache)
+    assert cache.thumb.getpixel((200, 100)) == 30  # outside the refreshed rectangle
+    assert cache.thumb.getpixel((0, 0)) == 33  # inside the refreshed rectangle
+    after.paste((39, 39, 39), (1536, 768, 1792, 1024))
+    ocr_lines(replace(first, image=after), cache)
+    assert len(reads) == 3
+
+
+def test_periodic_refresh_bounds_staleness_below_the_detection_threshold(reads):
+    cache = OcrCache()
+    first = capture_of()
+    ocr_lines(first, cache)
+    after = replace(first, image=first.image.point(lambda v: v + 1))
+    for _ in range(perception.MAX_OCR_REUSE_STEPS - 1):
+        ocr_lines(after, cache)
+    assert len(reads) == 1
+    lines, pct, rects = ocr_lines(after, cache)
+    assert len(reads) == 2 and pct == 100.0 and rects == 0
+    assert lines[0][0] == "read 2"
