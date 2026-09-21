@@ -45,6 +45,7 @@ def test_the_answer_request_carries_the_capture_and_the_run(screen, make_item, m
     assert answer == Answer(text="Sep 19, 2026 in Miami.", achieved=True)
     request = fake.requests[0]
     assert request.model == "answer-model"
+    assert request.required == ("answer",)
     assert request.image is not None
     assert request.packet["goal"] == GOAL
     assert request.packet["why_the_run_stopped"] == "the goal is achieved"
@@ -71,6 +72,7 @@ def test_requests_without_a_capture_stay_text_only_on_the_writer_model(monkeypat
 
     request = fake.requests[0]
     assert request.model == "writer-model"
+    assert request.required == ("ok", "url")
     assert request.image is None
 
 

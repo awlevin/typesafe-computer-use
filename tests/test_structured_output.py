@@ -38,6 +38,16 @@ def test_rejects_missing_required_property():
         decode_json_object('{"ok":true,"url":"https://gemini.google.com/"}', URL_PROPERTIES)
 
 
+def test_allows_missing_optional_property():
+    result = decode_json_object(
+        '{"ok":true,"url":"https://gemini.google.com/"}',
+        URL_PROPERTIES,
+        required=("ok", "url"),
+    )
+
+    assert result == {"ok": True, "url": "https://gemini.google.com/"}
+
+
 def test_rejects_wrong_property_type():
     with pytest.raises(StructuredOutputError):
         decode_json_object(

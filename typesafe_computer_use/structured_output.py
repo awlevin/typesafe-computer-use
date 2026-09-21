@@ -36,17 +36,21 @@ def _first_json_object(text: str) -> str | None:
     return None
 
 
-def _validate(data: dict[str, Any], properties: dict) -> None:
+def _validate(data: dict[str, Any], properties: dict, required: tuple[str, ...] | None) -> None:
     expected_types = {"boolean": bool, "string": str}
-    for name, schema in properties.items():
+    required_names = tuple(properties) if required is None else required
+    for name in required_names:
         if name not in data:
             raise StructuredOutputError(f"writer response is missing {name!r}", json.dumps(data))
+    for name, schema in properties.items():
+        if name not in data:
+            continue
         expected = expected_types.get(schema.get("type"))
         if expected is not None and not isinstance(data[name], expected):
             raise StructuredOutputError(f"writer response has the wrong type for {name!r}", json.dumps(data))
 
 
-def decode_json_object(raw: str, properties: dict) -> dict:
+def decode_json_object(raw: str, properties: dict, *, required: tuple[str, ...] | None = None) -> dict:
     text = raw.strip()
     if not text:
         raise StructuredOutputError("writer returned no text", raw)
@@ -62,7 +66,7 @@ def decode_json_object(raw: str, properties: dict) -> dict:
         if not isinstance(data, dict):
             continue
         try:
-            _validate(data, properties)
+            _validate(data, properties, required)
         except StructuredOutputError as error:
             raise StructuredOutputError(str(error), raw) from error
         return data

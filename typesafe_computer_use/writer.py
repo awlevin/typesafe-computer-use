@@ -41,7 +41,7 @@ class AnthropicWriterBackend:
                     "schema": {
                         "type": "object",
                         "properties": request.properties,
-                        "required": list(request.properties),
+                        "required": list(request.properties) if request.required is None else list(request.required),
                         "additionalProperties": False,
                     },
                 }
@@ -81,6 +81,7 @@ def _structured(
     max_tokens: int,
     model: str | None = None,
     image: Image.Image | None = None,
+    required: tuple[str, ...] | None = None,
 ) -> dict:
     request = StructuredRequest(
         system=system,
@@ -88,9 +89,10 @@ def _structured(
         properties=properties,
         max_tokens=max_tokens,
         model=model or writer_model(),
+        required=required,
         image=image,
     )
-    return decode_json_object(writer.generate(request), properties)
+    return decode_json_object(writer.generate(request), properties, required=required)
 
 
 def _image_block(image: Image.Image) -> dict:
@@ -126,6 +128,7 @@ def compose_text(writer: WriterBackend, goal: str, screen: Screen, items: list[I
             packet=packet,
             properties={"fill": {"type": "boolean"}, "text": {"type": "string"}, "reason": {"type": "string"}},
             max_tokens=256,
+            required=("fill", "text"),
         )
     except StructuredOutputError as error:
         if screen.field is None or not _sensitive_field(screen.field):
@@ -176,6 +179,7 @@ def compose_url(writer: WriterBackend, goal: str, history: list[str]) -> str:
             packet={"goal": goal, "now": now_context(), "previous_actions": history[-8:]},
             properties={"ok": {"type": "boolean"}, "url": {"type": "string"}, "reason": {"type": "string"}},
             max_tokens=200,
+            required=("ok", "url"),
         )
     except StructuredOutputError as error:
         return _url_fallback(error.raw)
@@ -225,10 +229,11 @@ def compose_answer(
             max_tokens=1024,
             model=answer_model(),
             image=screen.image,
+            required=("answer",),
         )
     except StructuredOutputError as error:
         text = error.raw.strip()
         if not text:
             raise
         return Answer(text=text, achieved=False)
-    return Answer(text=data["answer"].strip(), achieved=data["achieved"])
+    return Answer(text=data["answer"].strip(), achieved=data.get("achieved", False))

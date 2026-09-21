@@ -262,6 +262,16 @@ def test_plain_text_is_used_for_a_noncredential_field(screen):
     assert compose_text(PlainTextWriter(), "search", focused, [], []) == "latest Gemini models"
 
 
+def test_structured_text_can_omit_optional_reason(screen):
+    class StructuredTextWriter:
+        def generate(self, request):
+            return '{"fill": true, "text": "latest Gemini models"}'
+
+    focused = replace(screen, field=field())
+
+    assert compose_text(StructuredTextWriter(), "search", focused, [], []) == "latest Gemini models"
+
+
 def test_plain_text_is_not_used_for_a_credential_field(screen):
     class PlainTextWriter:
         def generate(self, request):

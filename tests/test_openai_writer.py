@@ -79,7 +79,32 @@ def test_auto_mode_falls_back_to_prompt_only(monkeypatch):
 
     assert writer.generate(request()) == '{"ok":true}'
     assert "response_format" not in client.chat.completions.requests[2]
-    assert "Return only one JSON object matching the supplied schema" in client.chat.completions.requests[2]["messages"][0]["content"]
+    prompt = client.chat.completions.requests[2]["messages"][0]["content"]
+    assert "Return only one JSON object matching the supplied schema" in prompt
+    assert '"properties": {"ok": {"type": "boolean"}}' in prompt
+    assert '"required": ["ok"]' in prompt
+
+
+def test_auto_mode_falls_back_after_invalid_structured_content(monkeypatch):
+    client = FakeClient("false", response('{"ok":true}'))
+    writer = backend(monkeypatch, client)
+
+    assert writer.generate(request()) == '{"ok":true}'
+    formats = [call["response_format"]["type"] for call in client.chat.completions.requests]
+    assert formats == ["json_schema", "json_object"]
+    assert writer.resolved_structured_mode == "json_object"
+
+
+def test_cached_mode_is_invalidated_when_later_content_is_invalid(monkeypatch):
+    client = FakeClient(response('{"ok":true}'), "false", response('{"ok":true}'))
+    writer = backend(monkeypatch, client)
+
+    assert writer.generate(request()) == '{"ok":true}'
+    assert writer.generate(request()) == '{"ok":true}'
+
+    formats = [call["response_format"]["type"] for call in client.chat.completions.requests]
+    assert formats == ["json_schema", "json_schema", "json_object"]
+    assert writer.resolved_structured_mode == "json_object"
 
 
 def test_successful_mode_is_cached(monkeypatch):

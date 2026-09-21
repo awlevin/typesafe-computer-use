@@ -23,6 +23,7 @@ class StructuredRequest:
     properties: dict
     max_tokens: int
     model: str
+    required: tuple[str, ...] | None = None
     image: Image.Image | None = None
 
 
