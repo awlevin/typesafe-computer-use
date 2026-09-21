@@ -52,5 +52,43 @@ def answer_model() -> str:
     return os.environ.get("CLICKER_ANSWER_MODEL", DEFAULT_ANSWER_MODEL)
 
 
+def writer_provider() -> str:
+    provider = os.environ.get("CLICKER_WRITER_PROVIDER", "anthropic").strip().lower()
+    if provider not in {"anthropic", "openai-compatible"}:
+        raise ValueError(f"unsupported CLICKER_WRITER_PROVIDER: {provider}")
+    return provider
+
+
+def writer_api_key() -> str | None:
+    return os.environ.get("CLICKER_WRITER_API_KEY") or os.environ.get("OPENAI_API_KEY") or None
+
+
+def writer_base_url() -> str | None:
+    return os.environ.get("CLICKER_WRITER_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or None
+
+
+def _boolean_env(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"true", "1", "yes"}:
+        return True
+    if value in {"false", "0", "no"}:
+        return False
+    raise ValueError(f"invalid boolean for {name}: {raw}")
+
+
+def writer_vision() -> bool:
+    return _boolean_env("CLICKER_WRITER_VISION", default=True)
+
+
+def structured_output_mode() -> str:
+    mode = os.environ.get("CLICKER_STRUCTURED_OUTPUT", "auto").strip().lower()
+    if mode not in {"auto", "json_schema", "json_object", "prompt"}:
+        raise ValueError(f"unsupported CLICKER_STRUCTURED_OUTPUT: {mode}")
+    return mode
+
+
 def email() -> str | None:
     return os.environ.get("CLICKER_EMAIL") or None

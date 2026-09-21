@@ -11,9 +11,11 @@ from urllib.parse import urlparse
 import anthropic
 from PIL import Image
 
+from . import config
 from .config import answer_model, writer_model
 from .dates import now_context
 from .models import Item, Screen
+from .openai_writer import OpenAICompatibleWriterBackend
 from .perception import near_field
 from .structured_output import decode_json_object
 from .writer_backend import StructuredRequest, WriterBackend
@@ -48,7 +50,19 @@ class AnthropicWriterBackend:
 
 
 def make_writer() -> WriterBackend | None:
-    """An Anthropic-backed writer, or None when no credentials resolve."""
+    """Build the configured writer backend, or None when its credentials are incomplete."""
+    if config.writer_provider() == "openai-compatible":
+        api_key = config.writer_api_key()
+        base_url = config.writer_base_url()
+        if not api_key or not base_url:
+            return None
+        return OpenAICompatibleWriterBackend(
+            api_key=api_key,
+            base_url=base_url,
+            vision_enabled=config.writer_vision(),
+            structured_mode=config.structured_output_mode(),
+        )
+
     client = anthropic.Anthropic()
     if client.api_key or getattr(client, "auth_token", None):
         return AnthropicWriterBackend(client)
