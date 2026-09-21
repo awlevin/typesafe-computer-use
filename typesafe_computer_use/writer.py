@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -143,6 +144,17 @@ def valid_url(url: str) -> bool:
     return parsed.scheme == "https" and "." in parsed.netloc and not any(ch.isspace() for ch in url)
 
 
+def _url_fallback(raw: str) -> str:
+    candidate = raw.strip()
+    if valid_url(candidate):
+        return candidate
+    for match in re.finditer(r"https://[^\s\"'<>`]+", raw):
+        candidate = match.group(0).rstrip(".,;:)]}")
+        if valid_url(candidate):
+            return candidate
+    return ""
+
+
 def compose_url(writer: WriterBackend, goal: str, history: list[str]) -> str:
     """The URL to open for this goal. Empty means no sensible site, or an invalid proposal."""
     try:
@@ -157,8 +169,7 @@ def compose_url(writer: WriterBackend, goal: str, history: list[str]) -> str:
             max_tokens=200,
         )
     except StructuredOutputError as error:
-        candidate = error.raw.strip()
-        return candidate if valid_url(candidate) else ""
+        return _url_fallback(error.raw)
     url = data["url"].strip() if data["ok"] else ""
     return url if valid_url(url) else ""
 

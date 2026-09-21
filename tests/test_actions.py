@@ -230,6 +230,17 @@ def test_plain_https_url_is_accepted(screen, browser):
     assert browser == [("open", "Google Chrome", "https://gemini.google.com/")]
 
 
+def test_partial_json_url_is_accepted(screen, browser):
+    class PartialJsonWriter:
+        def generate(self, request):
+            return '{"ok": true, "url": "https://gemini.google.com"}'
+
+    result = actions.perform(browsing("other"), screen, [], context(PartialJsonWriter()))
+
+    assert result == "opened https://gemini.google.com"
+    assert browser == [("open", "Google Chrome", "https://gemini.google.com")]
+
+
 def test_plain_http_url_is_rejected(screen, browser):
     class PlainUrlWriter:
         def generate(self, request):
