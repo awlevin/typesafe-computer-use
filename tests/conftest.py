@@ -63,7 +63,7 @@ for _windows_module in ("psutil", "uiautomation", "win32api", "win32con", "win32
 import pytest  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from typesafe_computer_use import macos  # noqa: E402
+from typesafe_computer_use import macos, windows  # noqa: E402
 from typesafe_computer_use.models import Item, Screen  # noqa: E402
 
 
@@ -90,6 +90,11 @@ def no_real_machine(monkeypatch):
     if REAL_ACCESSIBILITY:
         for name in ("AXUIElementPerformAction", "AXUIElementSetAttributeValue"):
             monkeypatch.setattr(macos.AS, name, refuse(f"ApplicationServices.{name}"))
+    # The Windows adapter: SendInput and the cursor carry all input; the rest launch, activate,
+    # open, capture, or act on another app's element.
+    for name in ("_send", "_move", "screenshot", "activate", "open_url", "open_path", "ax_press", "ax_focus", "ax_set_value"):
+        monkeypatch.setattr(windows, name, refuse(f"windows.{name}"))
+    monkeypatch.setattr(windows, "mouse_location", lambda: (500.0, 500.0))
 
 
 @pytest.fixture
