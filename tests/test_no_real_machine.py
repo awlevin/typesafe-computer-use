@@ -19,7 +19,7 @@ from typesafe_computer_use import macos
 )
 def test_an_unpatched_call_refuses_instead_of_reaching_the_machine(touch):
     # Off macOS the stand-in Quartz refuses first, before the guard is reached.
-    with pytest.raises(RuntimeError, match="real machine|unavailable off macOS"):
+    with pytest.raises(RuntimeError, match=r"real machine|unavailable off macOS"):
         touch()
 
 
