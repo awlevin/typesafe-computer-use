@@ -6,7 +6,7 @@
   <a href="https://github.com/awlevin/typesafe-computer-use/actions/workflows/ci.yaml"><img alt="CI" src="https://github.com/awlevin/typesafe-computer-use/actions/workflows/ci.yaml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white">
-  <img alt="macOS and Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-000000">
+  <img alt="macOS, Windows experimental" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20(experimental)-000000">
   <a href="https://docs.typesafe.ai"><img alt="TypeSafe" src="https://img.shields.io/badge/decisions-TypeSafe%20jev-8b5cf6"></a>
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json"></a>
 </p>
@@ -52,7 +52,8 @@ reasoning the frontier model does for free has to be rebuilt here as determinist
 
 ## Install
 
-macOS 14+ or Windows 10/11, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/).
+macOS 14 or newer, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/). Windows 10 and 11
+are experimental; see [Windows](#windows-experimental) below.
 
 ```
 git clone https://github.com/awlevin/typesafe-computer-use
@@ -106,25 +107,34 @@ CLICKER_ANSWER_MODEL=deepseek-v4.1-flash
 CLICKER_WRITER_VISION=false
 ```
 
-`.env` lives at the repo root and is read by every entry point (`clicker`, `clicker-inspect`),
-so the keys work the same way on both platforms.
+`.env` lives at the repo root and is read by every entry point (`clicker`, `clicker-inspect`).
 
-**macOS**: grant your terminal **Screen Recording** and **Accessibility** in System Settings >
+Grant your terminal **Screen Recording** and **Accessibility** in System Settings >
 Privacy & Security. Without the first, captures are wallpaper. Without the second,
 synthetic clicks are silently dropped, and `--act` refuses to start.
 
-**Windows**: `uv sync` pulls `winocr`, `uiautomation`, `pywin32`, and `pyautogui` instead of the
-macOS-only packages (see `pyproject.toml`'s `sys_platform` markers). Install an OCR language pack
-once, from an elevated PowerShell:
+### Windows (experimental)
+
+`windows.py` provides the same adapter over UI Automation, Win32 `SendInput`, and
+Windows.Media.Ocr, and `uv sync` installs its packages in place of the macOS ones. It is
+untested on Windows: CI runs only its pure rules, on macOS and Linux. Expect it to break, and
+please report what you see. Install the English OCR language once, from an elevated PowerShell:
 
 ```powershell
 Add-WindowsCapability -Online -Name "Language.OCR~~~en-US~0.0.1.0"
 ```
 
-There is no Windows equivalent of the Screen Recording/Accessibility permission prompt; UI
-Automation and screen capture both work without one. Coverage of the accessibility tree still
-varies by app the same way it does on macOS — native Win32 apps expose it fully, Electron/Chromium
-apps need their own assistive-tech flag to expose one at all.
+No permission prompt is needed. What differs from macOS:
+
+- OCR reads English only, and reports no confidence, so every line counts as certain.
+- An app is its process: `activate` matches the executable name exactly (`notepad.exe`), or a
+  known browser by its product name (`Google Chrome` is `chrome.exe`). Window titles never count.
+- A click reads the cursor back first, and refuses to press, ending the run, when the cursor did
+  not reach the target (a UAC prompt or the lock screen has the input).
+- The browser URL is read off the address bar, which Chrome and Edge show without the scheme.
+- Only the primary monitor is captured. Command-[ (back) is Alt-Left.
+- When a policy blocks the installed `clicker.exe`, run `uv run python -m typesafe_computer_use`
+  with the same arguments, or `... typesafe_computer_use inspect` for `clicker-inspect`.
 
 ## Use
 
@@ -371,10 +381,13 @@ uv run clicker "same goal" --image runs/<ts>/step-003-raw.png --app "Google Chro
 
 ```
 typesafe_computer_use/
-  macos.py        the macOS platform adapter: Quartz, AX, AppleScript
-  windows.py      the Windows platform adapter: pywin32, UI Automation, pyautogui
+  platform_adapter.py
+                  `desktop`, the one way to the platform: windows.py on Windows,
+                  macos.py everywhere else; `Desktop` names what both provide
+  macos.py        the macOS adapter: Quartz, AX, AppleScript, Vision OCR
+  windows.py      the Windows adapter (experimental): UI Automation, SendInput,
+                  Windows.Media.Ocr
   ax_walk.py      the bounded accessibility-tree walk, shared by both adapters
-  platform_adapter.py   picks macos.py or windows.py by sys.platform at import time
   perception.py   capture, OCR, the read region and the changed-tile cache,
                   block merging, goal-echo filter, the accessibility item
                   source, and the merge of the two
@@ -399,10 +412,9 @@ tests/            pure logic: dates, merging, reading order, echo filter, config
                   here says the architecture cannot do that task
 ```
 
-A Linux port replaces both platform adapters with one over xdotool and AT-SPI, and swaps Vision
-OCR / Windows.Media.Ocr for PaddleOCR or RapidOCR. The tree walk itself takes its children,
-attributes, and actions as callables, so only those three bindings change per platform. Nothing
-else knows which OS it is running on.
+A Linux port adds a third adapter over xdotool, AT-SPI, and PaddleOCR or RapidOCR, and one line
+in `platform_adapter.py`. The tree walk takes its children, attributes, and actions as callables,
+so only those three bindings change per platform. Nothing else knows which OS it is running on.
 
 ## Known limits
 
