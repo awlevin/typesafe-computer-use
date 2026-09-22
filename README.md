@@ -72,8 +72,9 @@ The writer speaks the Anthropic Messages API, so any endpoint that answers it wo
 Studio, a LiteLLM proxy, a GPU box. Point `CLICKER_WRITER_BASE_URL` at it and name the models it
 serves. The host root or the full `.../v1/messages` URL both work. Such an endpoint may ignore
 structured-output parameters, so the schema is also spelled out in the prompt, and code fences or
-a sentence around the JSON are tolerated. The answer model reads a screenshot, so give it a model
-that takes images.
+a sentence around the JSON are tolerated. Thinking is turned off there, since a model that thinks by
+default spends the writer's small token budgets on it and returns no text. The answer model reads
+a screenshot, so give it a model that takes images.
 
 Keys never cross over: `CLICKER_WRITER_API_KEY` goes only to `CLICKER_WRITER_BASE_URL` (in both
 the `x-api-key` and `Authorization` headers, since proxies differ), and `ANTHROPIC_API_KEY` never

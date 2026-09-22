@@ -138,6 +138,8 @@ def test_a_custom_endpoint_is_told_the_schema_in_the_prompt(clean_env, endpoint)
     # Metered, as the runner hands it out.
     assert compose_url(MeteredWriter(make_writer(), Calls()), "open example", []) == "https://example.com"
     assert '"required": ["ok", "url", "reason"]' in endpoint.seen[0]["body"]["system"]
+    # Thinking on by default would spend the whole 200-token budget and leave no text.
+    assert endpoint.seen[0]["body"]["thinking"] == {"type": "disabled"}
 
 
 @pytest.mark.parametrize(
@@ -167,6 +169,7 @@ def test_anthropic_itself_gets_the_schema_only_through_output_config(clean_env, 
     monkeypatch.setattr(writer.messages, "create", create)
     compose_url(writer, "open example", [])
     assert "schema" not in sent["system"]
+    assert "thinking" not in sent
     assert sent["output_config"]["format"]["schema"]["required"] == ["ok", "url", "reason"]
 
 
@@ -201,38 +204,3 @@ def test_valid_url():
     assert not valid_url("https://localhost")
     assert not valid_url("https://www.cnn.com/a b")
     assert not valid_url("")
-
-
-def test_the_default_provider_is_left_to_its_own_thinking_default():
-    from types import SimpleNamespace
-
-    from typesafe_computer_use.writer import _is_default_provider
-
-    assert _is_default_provider(SimpleNamespace()) is True  # a fake without a base_url
-    assert _is_default_provider(SimpleNamespace(base_url=None)) is True
-    assert _is_default_provider(SimpleNamespace(base_url="https://api.anthropic.com")) is True
-
-
-def test_a_custom_endpoint_disables_thinking_so_it_cannot_eat_the_token_budget():
-    import json as _json
-    from types import SimpleNamespace
-
-    from typesafe_computer_use import writer as w
-
-    seen: list[dict] = []
-
-    class ProxyWriter:
-        base_url = "https://open.bigmodel.cn/api/anthropic"
-
-        def __init__(self):
-            self.messages = SimpleNamespace(create=self._create)
-
-        def _create(self, **request):
-            seen.append(request)
-            return SimpleNamespace(
-                content=[SimpleNamespace(type="text", text=_json.dumps({"ok": True, "url": "https://example.com"}))]
-            )
-
-    data = w.compose_url(ProxyWriter(), "open example", [])
-    assert data == "https://example.com"
-    assert seen[0]["thinking"] == {"type": "disabled"}

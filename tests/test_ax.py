@@ -103,16 +103,29 @@ def test_an_unlabelled_or_unpressable_off_screen_node_is_not_collected():
 
 
 def test_a_giant_frame_crossing_the_display_but_centred_off_it_never_becomes_an_item():
-    """A Chromium `shell` starts tens of thousands of points above the viewport yet crosses it:
-    `off_display` alone calls it partially visible, and clicking it would aim off the screen.
-    It belongs with the off-screen controls, not among the items the classifier can pick."""
+    """A Chromium `shell` starts thousands of points above the viewport yet crosses it: `off_display`
+    alone calls it partially visible, and a click on its centre would land far off the screen. It is
+    no item, but the controls inside it that are on screen still are."""
     shell = node(
-        "AXGroup", "shell", frame=(295.0, -13312.0, 889.0, 556.0), press=True, children=[node("AXButton", "inner", press=True)]
+        "AXGroup",
+        "shell",
+        frame=(0.0, -13312.0, 1728.0, 20000.0),
+        press=True,
+        children=[
+            node("AXButton", "Submit", frame=(100.0, 500.0, 120.0, 30.0), press=True),
+            node("AXButton", "Footer link", frame=(100.0, 6000.0, 120.0, 30.0), press=True),
+        ],
     )
-    tree = app(shell, node("AXButton", "Share", press=True))
-    found, hidden, _capped = walk(tree)
+    found, hidden, _capped = walk(app(shell))
+    assert [n.label for n in found] == ["Submit"]
+    assert [n.label for n in hidden] == ["shell", "Footer link"]
+
+
+def test_a_control_centred_past_the_edge_is_pressed_rather_than_clicked():
+    half = node("AXButton", "Half out", frame=(1650.0, 100.0, 200.0, 30.0), press=True)
+    found, hidden, _capped = walk(app(half, node("AXButton", "Share")))
     assert [n.label for n in found] == ["Share"]
-    assert [n.label for n in hidden] == ["shell", "inner"]
+    assert [n.label for n in hidden] == ["Half out"]
 
 
 def test_an_off_display_container_still_yields_its_pressable_children():

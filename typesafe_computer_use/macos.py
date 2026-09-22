@@ -323,10 +323,9 @@ def off_display(frame: Frame | None, display_w_pt: float, display_h_pt: float) -
 def center_on_display(frame: Frame | None, display_w_pt: float, display_h_pt: float) -> bool:
     """Whether a frame's centre falls on the display. Chromium pages report a giant `shell` frame
     that starts tens of thousands of points above the viewport yet crosses it, so `off_display`
-    alone lets it through as partially visible — and clicking it would aim far off the screen.
-    Such a frame cannot be pressed where it claims to be, so it belongs with the off-screen nodes.
+    alone lets it through as partially visible, and clicking it would aim far off the screen.
     A frameless or zero-size frame claims nothing (an application element, a closed menu), and its
-    centre is meaningless, so those stay as they were.
+    centre is meaningless, so those pass.
     """
     if frame is None:
         return True
@@ -420,9 +419,7 @@ def walk_actionable(
             if key in visited_keys:
                 continue
             visited_keys.add(key)
-        hidden = (
-            hidden or off_display(frame, display_w_pt, display_h_pt) or not center_on_display(frame, display_w_pt, display_h_pt)
-        )
+        hidden = hidden or off_display(frame, display_w_pt, display_h_pt)
         if hidden and len(offscreen) >= offscreen_cap:
             continue  # nothing left to collect down there, and it never counted on screen
         kids = list(children(node))
@@ -434,7 +431,9 @@ def walk_actionable(
         emitted = False
         duplicate = inherited and parent_emitted  # the parent already stands for this label
         nameless_group = role == "AXGroup" and not own_label  # a Chromium layout box, not a control
-        visible = not hidden and clickable(frame)
+        # A click lands on the centre, so a node centred off the display is no item, though it
+        # crosses the display. It stays reachable by AXPress, and its children are judged as their own.
+        visible = not hidden and clickable(frame) and center_on_display(frame, display_w_pt, display_h_pt)
         if label and not duplicate and not nameless_group:
             if visible:
                 pressable = AX_PRESS in actions(node)
