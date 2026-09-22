@@ -17,6 +17,7 @@ from typesafe_computer_use.perception import (
     tile_clusters,
     tiles_in,
 )
+from typesafe_computer_use.platform_adapter import desktop
 
 
 def screen_with(window, width=2000, height=1200, scale=2.0, app="Google Chrome", image=None):
@@ -199,15 +200,11 @@ def test_reocr_keeps_a_line_that_only_touches_the_rectangle_edge():
 
 
 def test_ocr_crop_offsets_boxes_back_into_full_capture_coordinates(monkeypatch):
-    class FakeOCR:
-        def __init__(self, image, recognition_level="accurate"):
-            self.image = image
+    def recognize_text(image):
+        assert image.size == (200, 100)  # the crop, not the capture
+        return [("hello", 0.9, (10.0, 20.0, 60.0, 50.0))]
 
-        def recognize(self, px=True):
-            assert self.image.size == (200, 100)  # the crop, not the capture
-            return [("hello", 0.9, (10.0, 20.0, 60.0, 50.0))]
-
-    monkeypatch.setattr(perception.ocrmac, "OCR", FakeOCR)
+    monkeypatch.setattr(desktop, "recognize_text", recognize_text)
     ((text, conf, box),) = ocr_crop(Image.new("RGB", (1000, 800)), (300.0, 400.0, 500.0, 500.0))
     assert (text, conf) == ("hello", 0.9)
     assert box == (310.0, 420.0, 360.0, 450.0)

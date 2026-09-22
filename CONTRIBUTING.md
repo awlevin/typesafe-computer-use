@@ -16,7 +16,10 @@ so a stall can be replayed offline with `--image`.
 - The writer never picks an action. When the classifier stops it may name a focus
   or ask the user, and the classifier takes every step from there. Watch the
   `calls:` line: a change that moves work to the writer should say why.
-- Platform calls live in `macos.py` only.
+- Platform calls live in the adapters, `macos.py` and `windows.py`, only. Everything else
+  reaches them through `platform_adapter.desktop`, and a new adapter call goes into the
+  `Desktop` protocol and both adapters together. The accessibility-tree walk is shared, in
+  `ax_walk.py`.
 - Never add a path that types a password.
 
 ## A task the loop cannot do

@@ -35,6 +35,10 @@ class Abort(Exception):
     """Raised when the user triggers an escape hatch."""
 
 
+class Missed(Exception):
+    """A click that could not be aimed: the pointer did not reach the point, so nothing was pressed."""
+
+
 @dataclass(frozen=True)
 class Exchange:
     """One question the writer put to the user, and what the user said."""

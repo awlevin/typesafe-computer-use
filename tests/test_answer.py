@@ -143,7 +143,7 @@ def test_the_last_capture_is_answered_from_when_nothing_acted_after_it(tmp_path,
 
 
 def test_the_screen_is_captured_again_when_an_action_made_the_last_capture_stale(tmp_path, screen, make_item, monkeypatch):
-    monkeypatch.setattr(runner.macos, "check_abort", lambda: None)
+    monkeypatch.setattr(runner.desktop, "check_abort", lambda: None)
     monkeypatch.setattr(runner, "capture", lambda *a, **k: screen)
     monkeypatch.setattr(runner, "perceive", lambda *a, **k: [make_item(0, "TICKETS")])
     fake = FakeWriter({"achieved": False, "answer": "No dates on screen."})

@@ -24,7 +24,7 @@ class Log:
         if echo:
             print(msg)
         if self.path is not None:
-            with self.path.open("a") as f:
+            with self.path.open("a", encoding="utf-8") as f:
                 f.write(msg + "\n")
 
 

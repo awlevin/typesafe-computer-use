@@ -8,10 +8,10 @@ from dataclasses import dataclass, field
 
 from typesafe_sdk import TypeSafeClient
 
-from . import macos
 from .config import SITES
 from .decide import OFFSCREEN_PREFIX, Decision, row_mates, verify_typed
-from .models import Field, Guidance, Item, Screen
+from .models import Field, Guidance, Item, Missed, Screen
+from .platform_adapter import desktop
 from .writer import Writer, WriterError, compose_text, compose_url
 
 VERIFY_THRESHOLD = 0.5
@@ -31,7 +31,7 @@ class Context:
 
 
 def perform(decision: Decision, screen: Screen, items: list[Item], ctx: Context) -> str:
-    macos.check_abort()
+    desktop.check_abort()
     key = decision.chosen
     by_index = {str(it.index): it for it in items}
     if key in by_index:
@@ -55,9 +55,12 @@ def click_item(item: Item, screen: Screen) -> str:
     a sticky header, a cookie banner, or a tooltip. An element that refuses still has a location.
     """
     ref = screen.ax_refs.get(item.index)
-    if ref is not None and macos.ax_press(ref):
+    if ref is not None and desktop.ax_press(ref):
         return f"pressed {item.text!r} via accessibility"
-    macos.click_at(screen.to_points(item))
+    try:
+        desktop.click_at(screen.to_points(item))
+    except Missed as e:
+        return f"click refused: {item.text!r} was not clicked, {e}"
     if ref is None:
         return f"clicked {item.text!r}"
     return f"clicked {item.text!r} (accessibility press did not take)"
@@ -74,7 +77,7 @@ def press_offscreen(key: str, screen: Screen) -> str:
     node = nodes[int(key)] if key.isdigit() and int(key) < len(nodes) else None
     if node is None:
         return f"press_offscreen refused: there is no off-screen control {key!r}"
-    if macos.ax_press(node.ref):
+    if desktop.ax_press(node.ref):
         return f"pressed {node.label!r} (off-screen control) via accessibility"
     return f"press_offscreen refused: {node.label!r} did not accept the press"
 
@@ -90,13 +93,13 @@ def fill_field(field: Field, text: str) -> str:
     """
     ref = field.ref
     if ref is not None:
-        macos.ax_focus(ref)
-        if macos.ax_set_value(ref, text):
-            back = macos.ax_value(ref)
+        desktop.ax_focus(ref)
+        if desktop.ax_set_value(ref, text):
+            back = desktop.ax_value(ref)
             if back is not None and back.endswith(text):
                 return "via accessibility"
-    macos.clear_field()
-    macos.type_text(text)
+    desktop.clear_field()
+    desktop.type_text(text)
     return "via keystrokes"
 
 
@@ -107,9 +110,9 @@ def restore_field(field: Field, typed: str) -> bool:
     has no keyboard fallback: Select All/Delete could destroy an unrelated field's contents.
     """
     ref = field.ref
-    if ref is None or macos.ax_value(ref) != typed:
+    if ref is None or desktop.ax_value(ref) != typed:
         return False
-    return macos.ax_set_value(ref, field.value) and macos.ax_value(ref) == field.value
+    return desktop.ax_set_value(ref, field.value) and desktop.ax_value(ref) == field.value
 
 
 def _use_browser(decision: Decision, screen, items, ctx: Context) -> str:
@@ -121,7 +124,7 @@ def _use_browser(decision: Decision, screen, items, ctx: Context) -> str:
     """
     site = decision.site.choice
     if site == "none":
-        if macos.activate(ctx.browser):
+        if desktop.activate(ctx.browser):
             return f"activated {ctx.browser}"
         return f"use_browser failed: {ctx.browser} did not come to the front"
     url = SITES.get(site)
@@ -134,7 +137,7 @@ def _use_browser(decision: Decision, screen, items, ctx: Context) -> str:
             return f"use_browser refused: the writer failed ({e})"
     if not url:
         return "use_browser refused: the writer proposed no usable URL for this goal"
-    if macos.open_url(ctx.browser, url):
+    if desktop.open_url(ctx.browser, url):
         return f"opened {url}"
     return f"use_browser failed: opened {url} but {ctx.browser} did not come to the front"
 
@@ -159,7 +162,7 @@ def _type_text(decision, screen: Screen, items, ctx: Context) -> str:
         return "type_text refused: writer declined to fill this field"
     how = fill_field(screen.field, text)
     time.sleep(0.3)
-    p = verify_typed(ctx.typesafe, ctx.goal, screen.field, text, macos.focused_field())
+    p = verify_typed(ctx.typesafe, ctx.goal, screen.field, text, desktop.focused_field())
     if p < VERIFY_THRESHOLD:
         recovery = "restored previous value" if restore_field(screen.field, text) else "could not safely restore previous value"
         return f"typed {text!r} into {screen.field.label!r} {how} but verification failed ({p:.2f}); {recovery}"
@@ -168,7 +171,7 @@ def _type_text(decision, screen: Screen, items, ctx: Context) -> str:
 
 def _key(name: str, description: str, command: bool = False):
     def handler(decision, screen, items, ctx) -> str:
-        macos.press(name, command)
+        desktop.press(name, command)
         return description
 
     return handler
@@ -176,7 +179,7 @@ def _key(name: str, description: str, command: bool = False):
 
 def _scroll(lines: int, description: str):
     def handler(decision, screen, items, ctx) -> str:
-        macos.scroll(lines)
+        desktop.scroll(lines)
         return description
 
     return handler
@@ -184,7 +187,7 @@ def _scroll(lines: int, description: str):
 
 def _wait(decision, screen, items, ctx) -> str:
     """Give a loading page time. The step's own delay follows, so a wait is worth both."""
-    macos.sleep_watching(WAIT_SECONDS)
+    desktop.sleep_watching(WAIT_SECONDS)
     return "waited"
 
 

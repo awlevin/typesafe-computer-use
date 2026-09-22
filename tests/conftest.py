@@ -1,12 +1,12 @@
 """Shared fixtures, a guard that keeps every test off the real machine, and import-only
-stand-ins for the macOS-only modules.
+stand-ins for the platform-only modules.
 
-The suite is pure logic and should run on any OS. The platform adapter
-(`typesafe_computer_use.macos`, `typesafe_computer_use.perception`) imports
-Quartz, ApplicationServices and ocrmac at module scope, but the tests only ever
-import it -- they never call it -- so a stand-in that exists and raises on any
-real use is enough to run the whole suite off macOS. On macOS the real modules
-are installed and nothing below is registered.
+The suite is pure logic and should run on any OS. The platform adapters
+(`typesafe_computer_use.macos`, `typesafe_computer_use.windows`) import their
+platform's packages at module scope, but the tests only ever import them -- they
+call nothing but the pure rules -- so a stand-in that exists and raises on any
+real use is enough to run the whole suite anywhere. Where a real module is
+installed, nothing is registered for it.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _stub(name: str) -> types.ModuleType:
     module = types.ModuleType(name)
 
     def _getattr(attr: str) -> object:
-        raise RuntimeError(f"{name}.{attr} is unavailable off macOS; tests must not call the platform adapter")
+        raise RuntimeError(f"{name}.{attr} is unavailable on this OS; tests must not call the platform adapter")
 
     module.__getattr__ = _getattr
     sys.modules[name] = module
@@ -60,11 +60,14 @@ if _absent("ocrmac"):
     _package.__path__ = []
     _package.ocrmac = _stub("ocrmac.ocrmac")
     _package.ocrmac.OCR = _OCR
+for _windows_module in ("psutil", "uiautomation", "win32api", "win32con", "win32gui", "win32process", "winocr"):
+    if _absent(_windows_module):
+        _stub(_windows_module)
 
 import pytest  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from typesafe_computer_use import cli, macos  # noqa: E402
+from typesafe_computer_use import macos, windows  # noqa: E402
 from typesafe_computer_use.browser import cdp  # noqa: E402
 from typesafe_computer_use.models import Item, Screen  # noqa: E402
 
@@ -86,13 +89,17 @@ def no_real_machine(monkeypatch):
 
         return call
 
-    for name in ("_post", "osascript", "screenshot"):
+    for name in ("_post", "osascript", "screenshot", "open_path"):
         monkeypatch.setattr(macos, name, refuse(f"macos.{name}"))
     monkeypatch.setattr(macos, "mouse_location", lambda: (500.0, 500.0))
-    monkeypatch.setattr(cli, "subprocess", SimpleNamespace(run=refuse("subprocess.run in cli")))
     if REAL_ACCESSIBILITY:
         for name in ("AXUIElementPerformAction", "AXUIElementSetAttributeValue"):
             monkeypatch.setattr(macos.AS, name, refuse(f"ApplicationServices.{name}"))
+    # The Windows adapter: SendInput and the cursor carry all input; the rest launch, activate,
+    # open, capture, or act on another app's element.
+    for name in ("_send", "_move", "screenshot", "activate", "open_url", "open_path", "ax_press", "ax_focus", "ax_set_value"):
+        monkeypatch.setattr(windows, name, refuse(f"windows.{name}"))
+    monkeypatch.setattr(windows, "mouse_location", lambda: (500.0, 500.0))
 
     # The browser backend: no Chrome and no process of any kind, nothing over CDP, and no
     # connection except to a server on this machine that the test started itself.

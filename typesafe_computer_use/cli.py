@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
 
-from . import config, macos
+from . import config
 from .actions import Context
 from .perception import capture, perceive
+from .platform_adapter import desktop
 from .report import annotate, ax_count, render_payload
 from .runner import RunConfig, run
 from .timing import format_timing
@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     _prepare()
-    if args.act and not macos.accessibility_trusted():
+    if args.act and not desktop.accessibility_trusted():
         sys.exit("this terminal lacks Accessibility permission; grant it in System Settings > Privacy & Security")
     try:
         writer = make_writer()
@@ -129,7 +129,7 @@ def inspect(argv: list[str] | None = None) -> None:
     text = args.out / "state.txt"
     screen.image.save(args.out / "raw.png")
     annotate(screen, items, chosen="", out=annotated)
-    text.write_text(render_payload(args.goal, screen, items, [], browser, config.email()))
+    text.write_text(render_payload(args.goal, screen, items, [], browser, config.email()), encoding="utf-8")
 
     print(
         f"app={screen.app!r} url={screen.url!r} items={len(items)} ax={ax_count(items)} "
@@ -138,5 +138,5 @@ def inspect(argv: list[str] | None = None) -> None:
     print(format_timing(timing))
     print(f"  {annotated}\n  {text}")
     if not args.no_open:
-        subprocess.run(["open", str(annotated)], check=False)
-        subprocess.run(["open", "-t", str(text)], check=False)
+        desktop.open_path(annotated)
+        desktop.open_path(text, as_text=True)
