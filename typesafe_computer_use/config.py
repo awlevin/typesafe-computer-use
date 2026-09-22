@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 MIN_OCR_CONFIDENCE = 0.3
 MAX_OPTIONS = 255  # TypeSafe Choice ceiling
@@ -15,6 +16,7 @@ DEFAULT_HANDOFFS = 10  # each one is a call to the answer model, a few seconds a
 DEFAULT_WRITER_MODEL = "claude-haiku-4-5"
 DEFAULT_ANSWER_MODEL = "claude-sonnet-5"  # runs only when the classifier stops, on a screenshot: worth a stronger reader
 DEFAULT_BROWSER = "Google Chrome"
+ANTHROPIC_HOST = "api.anthropic.com"
 
 # Sites the classifier can pick by name. Anything else goes through the writer.
 SITES: dict[str, str] = {
@@ -50,13 +52,13 @@ def writer_model() -> str:
 
 
 def writer_base_url() -> str | None:
-    """Where the writer's Messages API lives: an Anthropic-compatible endpoint.
+    """The Anthropic-compatible endpoint in CLICKER_WRITER_BASE_URL, or None to leave it to the SDK.
 
-    Set CLICKER_WRITER_BASE_URL (or ANTHROPIC_BASE_URL) to point the writer at a proxy or a
-    self-hosted model instead of api.anthropic.com. Either the host root or the full
-    .../v1/messages URL works; the SDK appends the path itself.
+    Either the host root or the full .../v1/messages URL works; the SDK appends the path itself.
+    ANTHROPIC_BASE_URL is not read here: the SDK reads it together with the Anthropic credentials,
+    so a key and the endpoint it was meant for always travel as a pair.
     """
-    raw = os.environ.get("CLICKER_WRITER_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL")
+    raw = os.environ.get("CLICKER_WRITER_BASE_URL")
     if not raw:
         return None
     base = raw.strip().rstrip("/")
@@ -65,6 +67,12 @@ def writer_base_url() -> str | None:
             base = base[: -len(suffix)]
             break
     return base.rstrip("/") or None
+
+
+def custom_writer_endpoint() -> bool:
+    """Whether the writer talks to anything but Anthropic's own API, by either variable."""
+    url = writer_base_url() or os.environ.get("ANTHROPIC_BASE_URL")
+    return bool(url) and urlparse(url).hostname != ANTHROPIC_HOST
 
 
 def answer_model() -> str:

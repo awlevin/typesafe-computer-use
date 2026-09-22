@@ -1,9 +1,23 @@
+import json
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 
-from typesafe_computer_use.config import load_dotenv, writer_base_url
-from typesafe_computer_use.writer import make_writer, parse_json, valid_url
+from typesafe_computer_use.calls import Calls, MeteredWriter
+from typesafe_computer_use.config import custom_writer_endpoint, load_dotenv, writer_base_url
+from typesafe_computer_use.writer import compose_url, make_writer, parse_json, provider, valid_url
+
+WRITER_ENV = (
+    "CLICKER_WRITER_BASE_URL",
+    "CLICKER_WRITER_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_PROFILE",
+)
 
 
 def test_dotenv_sets_only_missing_keys(tmp_path, monkeypatch):
@@ -35,30 +49,132 @@ def test_the_writer_endpoint_accepts_any_of_its_spellings(given, expected, monke
     assert writer_base_url() == expected
 
 
-def test_the_writer_endpoint_falls_back_to_the_anthropic_variable(monkeypatch):
+def test_the_anthropic_base_url_is_left_to_the_sdk(monkeypatch):
     monkeypatch.delenv("CLICKER_WRITER_BASE_URL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:8081/v1/messages")
-    assert writer_base_url() == "http://localhost:8081"
-
-
-def test_no_endpoint_variable_means_the_default_provider(monkeypatch):
-    for name in ("CLICKER_WRITER_BASE_URL", "ANTHROPIC_BASE_URL"):
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:8081")
     assert writer_base_url() is None
 
 
-def test_an_endpoint_of_its_own_needs_no_key(monkeypatch):
-    monkeypatch.setenv("CLICKER_WRITER_BASE_URL", "http://localhost:8081/v1/messages")
-    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+@pytest.fixture
+def clean_env(monkeypatch):
+    for name in WRITER_ENV:
         monkeypatch.delenv(name, raising=False)
-    writer = make_writer()
-    assert str(writer.base_url) == "http://localhost:8081"
+    return monkeypatch
 
 
-def test_without_credentials_or_an_endpoint_there_is_no_writer(monkeypatch):
-    for name in ("CLICKER_WRITER_BASE_URL", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
-        monkeypatch.delenv(name, raising=False)
+@pytest.fixture
+def endpoint():
+    """An Anthropic-compatible server on localhost that records each request and answers `reply`."""
+    seen: list[dict] = []
+    state = {"reply": '{"ok": true, "url": "https://example.com", "reason": ""}'}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
+            out = json.dumps(
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": body["model"],
+                    "content": [{"type": "text", "text": state["reply"]}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield SimpleNamespace(url=f"http://127.0.0.1:{server.server_port}", seen=seen, state=state)
+    server.shutdown()
+
+
+def test_an_endpoint_of_its_own_needs_no_key(clean_env, endpoint):
+    clean_env.setenv("CLICKER_WRITER_BASE_URL", f"{endpoint.url}/v1/messages")
+    assert compose_url(make_writer(), "open example", []) == "https://example.com"
+    (request,) = endpoint.seen
+    assert request["path"] == "/v1/messages"
+    assert request["headers"]["x-api-key"] == "not-needed"
+
+
+def test_the_endpoint_key_goes_to_the_endpoint_and_no_anthropic_credential_does(clean_env, endpoint):
+    clean_env.setenv("CLICKER_WRITER_BASE_URL", endpoint.url)
+    clean_env.setenv("CLICKER_WRITER_API_KEY", "proxy-key")
+    clean_env.setenv("ANTHROPIC_API_KEY", "sk-ant-real")
+    clean_env.setenv("ANTHROPIC_AUTH_TOKEN", "oauth-real")
+    compose_url(make_writer(), "open example", [])
+    headers = endpoint.seen[0]["headers"]
+    assert headers["x-api-key"] == "proxy-key"
+    assert headers["authorization"] == "Bearer proxy-key"
+    assert not any("sk-ant-real" in v or "oauth-real" in v for v in headers.values())
+
+
+def test_a_bearer_token_still_goes_out_as_a_bearer_token(clean_env, endpoint):
+    clean_env.setenv("ANTHROPIC_BASE_URL", endpoint.url)
+    clean_env.setenv("ANTHROPIC_AUTH_TOKEN", "oauth-real")
+    compose_url(make_writer(), "open example", [])
+    headers = endpoint.seen[0]["headers"]
+    assert headers["authorization"] == "Bearer oauth-real"
+    assert "x-api-key" not in headers
+
+
+def test_without_credentials_or_an_endpoint_there_is_no_writer(clean_env):
     assert make_writer() is None
+
+
+def test_a_custom_endpoint_is_told_the_schema_in_the_prompt(clean_env, endpoint):
+    clean_env.setenv("CLICKER_WRITER_BASE_URL", endpoint.url)
+    endpoint.state["reply"] = 'Here you go:\n```json\n{"ok": true, "url": "https://example.com", "reason": "x"}\n```'
+    # Metered, as the runner hands it out.
+    assert compose_url(MeteredWriter(make_writer(), Calls()), "open example", []) == "https://example.com"
+    assert '"required": ["ok", "url", "reason"]' in endpoint.seen[0]["body"]["system"]
+
+
+@pytest.mark.parametrize(
+    ("env", "custom"),
+    [
+        ({}, False),
+        ({"ANTHROPIC_BASE_URL": "https://api.anthropic.com"}, False),
+        ({"ANTHROPIC_BASE_URL": "http://localhost:1234"}, True),
+        ({"CLICKER_WRITER_BASE_URL": "http://localhost:1234/v1/messages"}, True),
+    ],
+)
+def test_the_endpoint_is_custom_whichever_variable_names_it(clean_env, env, custom):
+    for name, value in env.items():
+        clean_env.setenv(name, value)
+    assert custom_writer_endpoint() is custom
+
+
+def test_anthropic_itself_gets_the_schema_only_through_output_config(clean_env, monkeypatch):
+    clean_env.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    writer = make_writer()
+    sent = {}
+
+    def create(**kwargs):
+        sent.update(kwargs)
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text='{"ok": false, "url": "", "reason": ""}')])
+
+    monkeypatch.setattr(writer.messages, "create", create)
+    compose_url(writer, "open example", [])
+    assert "schema" not in sent["system"]
+    assert sent["output_config"]["format"]["schema"]["required"] == ["ok", "url", "reason"]
+
+
+def test_the_startup_line_leaves_credentials_out_of_the_url(clean_env):
+    clean_env.setenv("CLICKER_WRITER_BASE_URL", "https://user:secret@proxy.example.com/v1/messages")
+    line = provider(make_writer())
+    assert line.startswith("https://proxy.example.com  models:")
+    assert "secret" not in line
 
 
 @pytest.mark.parametrize(

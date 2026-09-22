@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import anthropic
 from PIL import Image
 
-from .config import answer_model, writer_base_url, writer_model
+from .config import answer_model, custom_writer_endpoint, writer_base_url, writer_model
 from .dates import now_context
 from .models import Guidance, Item, Screen
 from .perception import near_field
@@ -25,22 +25,29 @@ PLACEHOLDER_KEY = "not-needed"  # an endpoint you host yourself does not check a
 def make_writer() -> anthropic.Anthropic | None:
     """A client, or None when there is nothing to write with.
 
-    Credentials come from ANTHROPIC_API_KEY. A non-default endpoint (see config.writer_base_url)
-    needs no real key of its own, so a placeholder stands in when the proxy does not check one.
+    A key only ever goes to the endpoint it belongs to. CLICKER_WRITER_BASE_URL (see
+    config.writer_base_url) is paired with CLICKER_WRITER_API_KEY, or with a placeholder when that
+    is unset, since an endpoint you host yourself checks no key. Otherwise the SDK reads the
+    ANTHROPIC_* key, token, and base URL as it always does.
     """
     base_url = writer_base_url()
-    api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-    if not api_key and not base_url:
-        return None
-    client = anthropic.Anthropic(base_url=base_url, api_key=api_key or PLACEHOLDER_KEY)
-    if client.api_key or getattr(client, "auth_token", None):
+    if base_url:
+        key = os.environ.get("CLICKER_WRITER_API_KEY") or PLACEHOLDER_KEY
+        # Proxies differ in which header they read, so the key goes in both. Passing any key at all
+        # also keeps the SDK from adding ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN on its own.
+        return anthropic.Anthropic(base_url=base_url, api_key=key, auth_token=key)
+    client = anthropic.Anthropic()
+    if client.api_key or client.auth_token:
         return client
     return None
 
 
 def provider(writer: anthropic.Anthropic) -> str:
-    """Where the writer actually sends its requests, for logging."""
-    return f"{str(writer.base_url).rstrip('/')}  models: {writer_model()} (writing), {answer_model()} (answering)"
+    """Where the writer sends its requests, for logging. Credentials and query in the URL are left out."""
+    url = writer.base_url
+    port = f":{url.port}" if url.port else ""
+    where = f"{url.scheme}://{url.host}{port}{url.path.rstrip('/')}"
+    return f"{where}  models: {writer_model()} (writing), {answer_model()} (answering)"
 
 
 def _structured(
@@ -56,12 +63,14 @@ def _structured(
     content: list[dict] = [{"type": "text", "text": json.dumps(packet)}]
     if image is not None:
         content.insert(0, _image_block(image))
+    if custom_writer_endpoint():
+        # Anthropic enforces output_config. Another endpoint may ignore it without a word, so the
+        # schema is spelled out in the prompt as well.
+        system = f"{system}\n\nAnswer with a single JSON object and nothing else, matching this schema:\n{json.dumps(schema)}"
     response = writer.messages.create(
         model=model or writer_model(),
         max_tokens=max_tokens,
-        # The schema goes into the system prompt as well: an endpoint that honours output_config ignores
-        # this line, and one that does not is still told what shape to answer in.
-        system=f"{system}\n\nAnswer with a single JSON object and nothing else, matching this schema:\n{json.dumps(schema)}",
+        system=system,
         messages=[{"role": "user", "content": content}],
         output_config={"format": {"type": "json_schema", "schema": schema}},
     )

@@ -63,23 +63,26 @@ cp .env.example .env     # fill in the keys
 | `ANTHROPIC_API_KEY` | no | `type_text`, writer-proposed URLs, and the final answer |
 | `CLICKER_EMAIL` | no | enables the `type_email` action |
 | `CLICKER_BROWSER` | no | defaults to `Google Chrome` |
-| `CLICKER_WRITER_BASE_URL` | no | where the writer sends its requests; unset means `api.anthropic.com` |
+| `CLICKER_WRITER_BASE_URL` | no | send the writer to another endpoint; unset means `api.anthropic.com` |
+| `CLICKER_WRITER_API_KEY` | no | the key for `CLICKER_WRITER_BASE_URL`, if it checks one |
 | `CLICKER_WRITER_MODEL` | no | defaults to `claude-haiku-4-5` |
 | `CLICKER_ANSWER_MODEL` | no | reads the screen whenever the classifier stops; defaults to `claude-sonnet-5` |
 
-The writer speaks the Anthropic Messages API, so any endpoint that answers it works too: a LiteLLM
-or LiteLLM-style proxy, a GPU box, a local model. Point `CLICKER_WRITER_BASE_URL` at it and name
-whatever models it serves. The host root or the full `.../v1/messages` URL both work; the SDK adds
-the path itself. A schema is sent in the request *and* asked for in the prompt, so a proxy that
-ignores structured-output parameters still gets JSON (fences and preamble are tolerated on the way
-back). An endpoint you host yourself needs no key; `ANTHROPIC_API_KEY` is only required when the
-writer talks to Anthropic.
+The writer speaks the Anthropic Messages API, so any endpoint that answers it works too: LM
+Studio, a LiteLLM proxy, a GPU box. Point `CLICKER_WRITER_BASE_URL` at it and name the models it
+serves. The host root or the full `.../v1/messages` URL both work. Such an endpoint may ignore
+structured-output parameters, so the schema is also spelled out in the prompt, and code fences or
+a sentence around the JSON are tolerated. The answer model reads a screenshot, so give it a model
+that takes images.
+
+Keys never cross over: `CLICKER_WRITER_API_KEY` goes only to `CLICKER_WRITER_BASE_URL` (in both
+the `x-api-key` and `Authorization` headers, since proxies differ), and `ANTHROPIC_API_KEY` never
+goes there. Leave `CLICKER_WRITER_API_KEY` empty for an endpoint that checks no key.
 
 ```
-cp .env.example .env
-# CLICKER_WRITER_BASE_URL=http://localhost:8081/v1/messages
-# CLICKER_WRITER_MODEL=qwen3.8-flash-next
-# CLICKER_ANSWER_MODEL=qwen3.8-flash-next
+CLICKER_WRITER_BASE_URL=http://localhost:1234
+CLICKER_WRITER_MODEL=qwen3.8-flash-next
+CLICKER_ANSWER_MODEL=qwen3.8-flash-next
 ```
 
 Grant your terminal **Screen Recording** and **Accessibility** in System Settings >
