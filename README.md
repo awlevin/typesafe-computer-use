@@ -20,6 +20,10 @@ free text or the classifier has stopped and the screen needs reading.
 clicker "go to techcrunch and take me to the checkout page for the cheapest tickets to their next upcoming event" --act
 ```
 
+> **Beta.** This is under heavy development. Expect rough edges, and expect settings and
+> behavior to change between 0.x [releases](https://github.com/awlevin/typesafe-computer-use/releases).
+> It drives your real mouse and keyboard, so start with a dry run.
+
 ## Why
 
 Frontier-model computer use is capable and expensive: every step ships a screenshot and
