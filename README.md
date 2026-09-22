@@ -65,7 +65,7 @@ cp .env.example .env     # fill in the keys
 | `CLICKER_BROWSER` | no | defaults to `Google Chrome` |
 | `CLICKER_WRITER_BASE_URL` | no | send the writer to another endpoint; unset means `api.anthropic.com` |
 | `CLICKER_WRITER_API_KEY` | no | the key for `CLICKER_WRITER_BASE_URL`, if it checks one |
-| `CLICKER_WRITER_MODEL` | no | defaults to `claude-haiku-4-5` |
+| `CLICKER_WRITER_MODEL` | no | types text and proposes URLs; defaults to `claude-haiku-4-5` |
 | `CLICKER_ANSWER_MODEL` | no | reads the screen whenever the classifier stops; defaults to `claude-sonnet-5` |
 
 The writer speaks the Anthropic Messages API, so any endpoint that answers it works too: LM
