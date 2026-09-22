@@ -1,19 +1,67 @@
-"""Picks the platform adapter at import time, so the rest of the package never checks sys.platform.
+"""The desktop this process drives: one platform adapter, chosen once, behind one name.
 
-Both macos.py and windows.py expose the same function surface (input synthesis, app/window control,
-capture, and the accessibility tree via ax_walk.py), so every other module imports this instead of
-either one directly and keeps calling it `macos`, the name the whole codebase already uses.
+Every other module reaches the platform through `desktop` and never imports macos.py or windows.py
+itself. Windows gets windows.py. Every other OS gets macos.py, the default: on macOS it is the real
+adapter, and on the Linux test runner tests/conftest.py stands in for the modules it imports, so the
+suite runs there unchanged. Only the Windows path imports a Windows-only package.
+
+`Desktop` is the surface both adapters provide, and tests/test_platform_adapter.py holds each of
+them to it, parameter for parameter.
 """
 
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+from typing import Protocol
 
-if sys.platform == "darwin":
-    from . import macos as adapter
-elif sys.platform == "win32":
-    from . import windows as adapter
+from PIL import Image
+
+from .models import AxNode, Box, Field
+
+OcrLine = tuple[str, float, Box]  # text, confidence, box in the image's own pixels
+
+
+class Desktop(Protocol):
+    # the escape hatch
+    def check_abort(self) -> None: ...
+    def sleep_watching(self, seconds: float) -> None: ...
+    def accessibility_trusted(self) -> bool: ...
+
+    # input
+    def click_at(self, point: tuple[float, float]) -> None: ...
+    def press(self, key: str, command: bool = False) -> None: ...
+    def type_text(self, text: str) -> None: ...
+    def clear_field(self) -> None: ...
+    def scroll(self, lines: int) -> None: ...
+
+    # apps and windows
+    def frontmost_app_and_pid(self) -> tuple[str, int]: ...
+    def activate(self, app: str, timeout: float = 3.0) -> bool: ...
+    def open_url(self, browser: str, url: str) -> bool: ...
+    def browser_url(self, browser: str) -> str | None: ...
+    def open_path(self, path: Path, as_text: bool = False) -> None: ...
+    def frontmost_window_bounds(self, pid: int | None = None) -> tuple[float, float, float, float] | None: ...
+
+    # capture, OCR, and accessibility
+    def screenshot(self) -> Image.Image: ...
+    def display_scale(self, image: Image.Image) -> float: ...
+    def recognize_text(self, image: Image.Image) -> list[OcrLine]: ...
+    def focused_field(self) -> Field | None: ...
+    def actionable_elements(
+        self, pid: int, display_w_pt: float, display_h_pt: float
+    ) -> tuple[list[AxNode], list[AxNode], bool]: ...
+
+    # acting on an element
+    def ax_press(self, ref) -> bool: ...
+    def ax_focus(self, ref) -> bool: ...
+    def ax_set_value(self, ref, text: str) -> bool: ...
+    def ax_value(self, ref) -> str | None: ...
+
+
+if sys.platform == "win32":
+    from . import windows as _adapter
 else:
-    raise RuntimeError(f"typesafe-computer-use has no adapter for platform {sys.platform!r} (supported: darwin, win32)")
+    from . import macos as _adapter
 
-globals().update({name: getattr(adapter, name) for name in dir(adapter) if not name.startswith("_")})
+desktop: Desktop = _adapter

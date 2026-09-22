@@ -9,9 +9,9 @@ import time
 from pathlib import Path
 
 from . import config
-from . import platform_adapter as macos
 from .actions import Context
 from .perception import capture, perceive
+from .platform_adapter import desktop
 from .report import annotate, ax_count, render_payload
 from .runner import RunConfig, run
 from .timing import format_timing
@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     _prepare()
-    if args.act and not macos.accessibility_trusted():
+    if args.act and not desktop.accessibility_trusted():
         sys.exit("this terminal lacks Accessibility permission; grant it in System Settings > Privacy & Security")
     try:
         writer = make_writer()
@@ -138,5 +138,5 @@ def inspect(argv: list[str] | None = None) -> None:
     print(format_timing(timing))
     print(f"  {annotated}\n  {text}")
     if not args.no_open:
-        macos.open_path(annotated)
-        macos.open_path(text)
+        desktop.open_path(annotated)
+        desktop.open_path(text, as_text=True)

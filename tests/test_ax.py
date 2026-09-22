@@ -5,6 +5,7 @@ import pytest
 from typesafe_computer_use import perception
 from typesafe_computer_use.ax_walk import AxAttrs, walk_actionable
 from typesafe_computer_use.models import AxNode, Item
+from typesafe_computer_use.platform_adapter import desktop
 
 DISPLAY = (1728.0, 1117.0)
 
@@ -203,7 +204,7 @@ def test_ax_items_convert_points_to_capture_pixels_and_name_the_role(screen, mon
         AxNode(role="AXPopUpButton", label="View site information", x=126.0, y=89.0, w=24.0, h=24.0, pressable=True),
         AxNode(role="AXDisclosureTriangle", label="More", x=10.0, y=10.0, w=12.0, h=12.0, pressable=True),
     ]
-    monkeypatch.setattr(perception.macos, "actionable_elements", lambda pid, w, h: (nodes, [], False))
+    monkeypatch.setattr(desktop, "actionable_elements", lambda pid, w, h: (nodes, [], False))
     items = perception.ax_items(replace(screen, pid=123), 255)
     assert [(it.role, it.source, it.text) for it in items] == [
         ("popup", "ax", "View site information"),
@@ -216,7 +217,7 @@ def test_ax_items_are_skipped_without_a_pid_and_when_the_walk_raises(screen, mon
     def boom(pid, w, h):
         raise RuntimeError("accessibility said no")
 
-    monkeypatch.setattr(perception.macos, "actionable_elements", boom)
+    monkeypatch.setattr(desktop, "actionable_elements", boom)
     assert perception.ax_items(screen, 255) == []
     assert perception.ax_items(replace(screen, pid=123), 255) == []
 
@@ -234,7 +235,7 @@ def test_ax_refs_follow_items_through_the_merge_and_the_renumbering(screen, monk
         AxNode(role="AXButton", label="Right", x=400.0, y=50.0, w=60.0, h=20.0, pressable=True, ref=right),
         AxNode(role="AXLink", label="Left", x=50.0, y=52.0, w=60.0, h=20.0, pressable=True, ref=left),
     ]
-    monkeypatch.setattr(perception.macos, "actionable_elements", lambda pid, w, h: (nodes, [], False))
+    monkeypatch.setattr(desktop, "actionable_elements", lambda pid, w, h: (nodes, [], False))
     monkeypatch.setattr(
         perception,
         "ocr",
@@ -260,7 +261,7 @@ def test_offscreen_controls_are_deduplicated_and_never_repeat_a_visible_item(scr
         AxNode(role="AXButton", label="Note 900", x=0.0, y=48000.0, w=40.0, h=40.0, pressable=True, ref=object()),
         AxNode(role="AXLink", label="Only text", x=0.0, y=-900.0, w=60.0, h=20.0, pressable=True, ref=object()),
     ]
-    monkeypatch.setattr(perception.macos, "actionable_elements", lambda pid, w, h: ([], hidden, False))
+    monkeypatch.setattr(desktop, "actionable_elements", lambda pid, w, h: ([], hidden, False))
     monkeypatch.setattr(perception, "ocr", lambda screen, budget, goal, *_: [Item(0, "Only text", 0.9, 10.0, 10.0, 90.0, 40.0)])
     live = replace(screen, pid=123)
     perception.perceive(live, 255, "goal")
@@ -268,7 +269,7 @@ def test_offscreen_controls_are_deduplicated_and_never_repeat_a_visible_item(scr
 
 
 def test_offscreen_controls_are_empty_in_replay(screen, monkeypatch):
-    monkeypatch.setattr(perception.macos, "actionable_elements", lambda pid, w, h: pytest.fail("no pid to walk"))
+    monkeypatch.setattr(desktop, "actionable_elements", lambda pid, w, h: pytest.fail("no pid to walk"))
     monkeypatch.setattr(perception, "ocr", lambda screen, budget, goal, *_: [])
     perception.perceive(screen, 255, "goal")
     assert screen.offscreen == []

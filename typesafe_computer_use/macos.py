@@ -1,8 +1,8 @@
 """macOS adapter: synthetic input, app control, screen capture, and the focused accessibility element.
 
-This is the only module that touches Quartz, ApplicationServices, or AppleScript. windows.py provides
-the same functions over pywin32, UI Automation, and pyautogui; the bounded tree walk itself lives in
-ax_walk.py, shared by both.
+This is the only module that touches Quartz, ApplicationServices, AppleScript, or Vision OCR.
+windows.py provides the same functions for Windows; platform_adapter.py picks one. The bounded tree
+walk itself lives in ax_walk.py, shared by both.
 """
 
 from __future__ import annotations
@@ -14,9 +14,10 @@ from pathlib import Path
 
 import ApplicationServices as AS
 import Quartz
+from ocrmac import ocrmac
 from PIL import Image
 
-from .ax_walk import AxAttrs, Frame, walk_actionable
+from .ax_walk import AX_PRESS, AxAttrs, Frame, walk_actionable
 from .config import ABORT_CORNER_PX
 from .models import Abort, AxNode, Field
 
@@ -139,8 +140,9 @@ def browser_url(browser: str) -> str | None:
         return None
 
 
-def open_path(path: Path) -> None:
-    subprocess.run(["open", str(path)], check=False)
+def open_path(path: Path, as_text: bool = False) -> None:
+    """Show a file to the user; `as_text` opens it in the default text editor."""
+    subprocess.run(["open", *(["-t"] if as_text else []), str(path)], check=False)
 
 
 def frontmost_window_bounds(pid: int | None = None) -> tuple[float, float, float, float] | None:
@@ -181,6 +183,11 @@ def display_scale(image: Image.Image) -> float:
     return image.width / points_wide
 
 
+def recognize_text(image: Image.Image) -> list[tuple[str, float, tuple[float, float, float, float]]]:
+    """Vision OCR lines as text, confidence, and a box in the image's own pixels."""
+    return ocrmac.OCR(image, recognition_level="accurate").recognize(px=True)
+
+
 def _ax_attr(element, name: str):
     """One attribute, or None. A dead or hostile element raises from the bridge; that is a miss, not a crash."""
     try:
@@ -218,8 +225,6 @@ def focused_field() -> Field | None:
 
 
 # ------------------------------------------------------------------ acting on an element
-
-AX_PRESS = "AXPress"
 
 # An element accepts these directly, so a press lands on the control the app declared rather than
 # on whatever pixel happens to sit at its center. Every one of them is best effort: the element may

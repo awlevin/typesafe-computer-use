@@ -9,13 +9,13 @@ from pathlib import Path
 
 from typesafe_sdk import TypeSafeClient
 
-from . import platform_adapter as macos
 from .actions import Context, perform
 from .calls import Calls, MeteredClassifier, MeteredWriter
 from .config import DEFAULT_DELAY, DEFAULT_HANDOFFS, DEFAULT_MIN_CONFIDENCE, DEFAULT_STEPS, MAX_OPTIONS
 from .decide import Decision, decide, offscreen_records
 from .models import Abort, Guidance, Item, Screen, Signature, same_screen, signature
 from .perception import OcrCache, capture, perceive
+from .platform_adapter import desktop
 from .report import Log, annotate, ax_count, render_payload, top
 from .timing import format_timing, phase, summarize
 from .writer import Answer, WriterError, compose_answer
@@ -190,7 +190,7 @@ def hand_off(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
                     return False
                 state.guidance = state.guidance.heard(answer.question, reply)
                 if cfg.act and not cfg.replay and state.view is not None:
-                    macos.activate(state.view[0].app)  # answering took the terminal to the front; put the work back there
+                    desktop.activate(state.view[0].app)  # answering took the terminal to the front; put the work back there
                 continue
             if resuming and answer.focus:
                 log(
@@ -204,7 +204,7 @@ def hand_off(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
             log(f"\nanswer ({verdict(answer)}, {seconds:.1f}s):\n  {answer.text}")
             return False
         finally:
-            (cfg.out / f"step-{step:03d}-review.json").write_text(json.dumps(reviews, indent=2))
+            (cfg.out / f"step-{step:03d}-review.json").write_text(json.dumps(reviews, indent=2), encoding="utf-8")
 
 
 def verdict(answer: Answer) -> str:
@@ -218,7 +218,7 @@ def review(cfg: RunConfig, ctx: Context, state: RunState, stopped: str, can_ask:
     screen is captured again, and saved so the answer can be checked against what it was read from.
     """
     if state.view is None:
-        macos.check_abort()
+        desktop.check_abort()
         screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser)
         screen.image.save(cfg.out / "answer-raw.png")
         state.view = (screen, perceive(screen, MAX_OPTIONS, cfg.goal))
@@ -251,7 +251,7 @@ def earlier_screens(state: RunState, final: Signature, budget: int = EARLIER_LIN
 
 
 def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log) -> bool:
-    macos.check_abort()
+    desktop.check_abort()
     timing: dict[str, float] = {}
     started = time.perf_counter()
     with phase(timing, "capture"):
@@ -301,7 +301,7 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     log(format_timing(timing))
 
     if state.view is None:  # an action ran: let the screen settle before the next step, or the answer, reads it
-        macos.sleep_watching(cfg.delay)
+        desktop.sleep_watching(cfg.delay)
     return keep_going
 
 

@@ -3,42 +3,15 @@
 from __future__ import annotations
 
 import math
-import sys
 from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageStat
 
-from . import platform_adapter as macos
 from .config import MAX_OPTIONS, MIN_OCR_CONFIDENCE
 from .models import AxNode, Box, Item, Screen
+from .platform_adapter import desktop
 from .timing import OCR_RECTS, OCR_REGION_PCT, phase
-
-RawLine = tuple[str, float, tuple[float, float, float, float]]
-
-if sys.platform == "darwin":
-    from ocrmac import ocrmac
-
-    def _ocr_raw(crop: Image.Image) -> list[RawLine]:
-        return ocrmac.OCR(crop, recognition_level="accurate").recognize(px=True)
-else:
-    import winocr
-
-    def _ocr_raw(crop: Image.Image) -> list[RawLine]:
-        """recognize_pil_sync returns plain dicts, not objects, and reports no per-line confidence."""
-        result = winocr.recognize_pil_sync(crop)
-        out: list[RawLine] = []
-        for line in result["lines"]:
-            rects = [w["bounding_rect"] for w in line["words"]]
-            if not rects:
-                continue
-            x1 = min(r["x"] for r in rects)
-            y1 = min(r["y"] for r in rects)
-            x2 = max(r["x"] + r["width"] for r in rects)
-            y2 = max(r["y"] + r["height"] for r in rects)
-            out.append((line["text"], 1.0, (x1, y1, x2, y2)))
-        return out
-
 
 Line = tuple[str, float, Box]
 ECHO_CHARS = 24
@@ -71,20 +44,22 @@ def capture(
     """
     replay = image_path is not None and app is not None
     with phase(timing, "screenshot"):
-        image = Image.open(image_path).convert("RGB") if image_path else macos.screenshot()
+        image = Image.open(image_path).convert("RGB") if image_path else desktop.screenshot()
     with phase(timing, "app"):
         if replay:
             frontmost, pid = app, None
         else:
-            frontmost, pid = macos.frontmost_app_and_pid()
+            frontmost, pid = desktop.frontmost_app_and_pid()
             frontmost = app or frontmost
     with phase(timing, "window"):
-        window = None if replay else macos.frontmost_window_bounds(pid)
+        window = None if replay else desktop.frontmost_window_bounds(pid)
     with phase(timing, "field"):
-        field = None if replay else macos.focused_field()
+        field = None if replay else desktop.focused_field()
     with phase(timing, "url"):
-        page_url = url if url is not None else (None if replay else macos.browser_url(browser))
-    return Screen(image=image, scale=macos.display_scale(image), app=frontmost, field=field, url=page_url, pid=pid, window=window)
+        page_url = url if url is not None else (None if replay else desktop.browser_url(browser))
+    return Screen(
+        image=image, scale=desktop.display_scale(image), app=frontmost, field=field, url=page_url, pid=pid, window=window
+    )
 
 
 def goal_echoes(goal: str) -> set[str]:
@@ -254,7 +229,7 @@ def ocr_crop(image: Image.Image, rect: Box) -> list[Line]:
     knows a crop happened."""
     x1, y1, x2, y2 = (round(v) for v in rect)
     crop = image if (x1, y1, x2, y2) == (0, 0, image.width, image.height) else image.crop((x1, y1, x2, y2))
-    raw = _ocr_raw(crop)
+    raw = desktop.recognize_text(crop)
     return [(text, conf, (b[0] + x1, b[1] + y1, b[2] + x1, b[3] + y1)) for text, conf, b in raw]
 
 
@@ -464,7 +439,7 @@ def ax_nodes(screen: Screen, budget: int) -> tuple[list[AxNode], list[AxNode]]:
         return [], []
     width_pt, height_pt = screen.size_pt
     try:
-        nodes, hidden, _capped = macos.actionable_elements(screen.pid, width_pt, height_pt)
+        nodes, hidden, _capped = desktop.actionable_elements(screen.pid, width_pt, height_pt)
     except Exception:
         return [], []
     return [node for node in nodes[:budget] if node.label], [node for node in hidden if node.label]

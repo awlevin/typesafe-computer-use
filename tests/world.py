@@ -22,9 +22,10 @@ from types import SimpleNamespace
 from PIL import Image
 from typesafe_sdk import Noul
 
-from typesafe_computer_use import actions, macos, runner
+from typesafe_computer_use import actions, runner
 from typesafe_computer_use.actions import Context
 from typesafe_computer_use.models import AxNode, Field, Item, Screen
+from typesafe_computer_use.platform_adapter import desktop
 from typesafe_computer_use.runner import RunConfig, RunState, run
 
 CAPTURE = (2000, 1200)
@@ -321,20 +322,20 @@ class World:
         """Replace the two outer seams: the screen the loop reads and the machine it drives."""
         monkeypatch.setattr(runner, "capture", lambda *a, **k: self.capture())
         monkeypatch.setattr(runner, "perceive", lambda screen, *a, **k: self.perceive(screen))
-        monkeypatch.setattr(macos, "check_abort", lambda: None)
-        monkeypatch.setattr(macos, "sleep_watching", lambda seconds: None)
-        monkeypatch.setattr(macos, "click_at", self.click_at)
-        monkeypatch.setattr(macos, "ax_press", self.ax_press)
-        monkeypatch.setattr(macos, "press", self.press)
-        monkeypatch.setattr(macos, "scroll", self.scroll)
-        monkeypatch.setattr(macos, "type_text", self.type_text)
-        monkeypatch.setattr(macos, "ax_focus", lambda ref: True)
-        monkeypatch.setattr(macos, "ax_set_value", self.ax_set_value)
-        monkeypatch.setattr(macos, "ax_value", self.ax_value)
-        monkeypatch.setattr(macos, "clear_field", self.clear_field)
-        monkeypatch.setattr(macos, "focused_field", self.focused_field)
-        monkeypatch.setattr(macos, "activate", self.activate)
-        monkeypatch.setattr(macos, "open_url", self.open_url)
+        monkeypatch.setattr(desktop, "check_abort", lambda: None)
+        monkeypatch.setattr(desktop, "sleep_watching", lambda seconds: None)
+        monkeypatch.setattr(desktop, "click_at", self.click_at)
+        monkeypatch.setattr(desktop, "ax_press", self.ax_press)
+        monkeypatch.setattr(desktop, "press", self.press)
+        monkeypatch.setattr(desktop, "scroll", self.scroll)
+        monkeypatch.setattr(desktop, "type_text", self.type_text)
+        monkeypatch.setattr(desktop, "ax_focus", lambda ref: True)
+        monkeypatch.setattr(desktop, "ax_set_value", self.ax_set_value)
+        monkeypatch.setattr(desktop, "ax_value", self.ax_value)
+        monkeypatch.setattr(desktop, "clear_field", self.clear_field)
+        monkeypatch.setattr(desktop, "focused_field", self.focused_field)
+        monkeypatch.setattr(desktop, "activate", self.activate)
+        monkeypatch.setattr(desktop, "open_url", self.open_url)
         # `wait` is the one action that touches no machine call, so the only way the world hears
         # about it is the handler itself. Without this a loading page would never finish loading.
         monkeypatch.setitem(actions._HANDLERS, "wait", lambda decision, screen, items, ctx: (self.apply("wait"), "waited")[1])
