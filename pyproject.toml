@@ -47,6 +47,7 @@ packages = ["typesafe_computer_use"]
 [tool.ruff]
 line-length = 130
 target-version = "py312"
+extend-exclude = [".agents", ".claude", ".private"]  # local agent folders: worktrees with their own venvs, links that may dangle
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]

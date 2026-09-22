@@ -26,6 +26,17 @@ def _prepare() -> None:
         sys.exit("TYPESAFE_API_KEY is not set (export it or put it in .env)")
 
 
+def ask_user(question: str) -> str:
+    """Read the user's reply to a question the run has just printed. An empty reply declines to answer.
+
+    The bell is for a user who is watching the browser, not this terminal.
+    """
+    try:
+        return input("\a  > ")
+    except EOFError:
+        return ""
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="clicker",
@@ -36,6 +47,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--steps", type=int, default=config.DEFAULT_STEPS, help="max actions before stopping")
     parser.add_argument("--min-confidence", type=float, default=config.DEFAULT_MIN_CONFIDENCE, help="stop below this confidence")
     parser.add_argument("--delay", type=float, default=config.DEFAULT_DELAY, help="seconds to wait after each action")
+    parser.add_argument(
+        "--handoffs",
+        type=int,
+        default=config.DEFAULT_HANDOFFS,
+        help="times the writer may send a stopped run back to the classifier with a new focus (0: every stop is final)",
+    )
     parser.add_argument("--out", type=Path, default=Path("runs") / time.strftime("%Y%m%d-%H%M%S"), help="run folder")
     parser.add_argument("--image", type=Path, help="replay a saved capture instead of the live screen (never acts)")
     parser.add_argument("--app", help="frontmost app to report during replay")
@@ -58,6 +75,7 @@ def main(argv: list[str] | None = None) -> None:
         steps=args.steps,
         min_confidence=args.min_confidence,
         delay=args.delay,
+        handoffs=args.handoffs,
         image=args.image,
         app=args.app,
         url=args.url,
@@ -71,6 +89,7 @@ def main(argv: list[str] | None = None) -> None:
             typesafe=typesafe,
             writer=writer,
             history=history,
+            ask=ask_user if sys.stdin.isatty() else None,
         )
 
     state = run(cfg, ctx_factory)

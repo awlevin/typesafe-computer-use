@@ -8,7 +8,7 @@ from pathlib import Path
 from PIL import ImageDraw, ImageFont
 
 from .decide import base_state, item_criteria, kind_criteria, offscreen_criteria, site_criteria
-from .models import Item, Screen
+from .models import Guidance, Item, Screen
 
 FONT_PATH = "/System/Library/Fonts/Helvetica.ttc"
 RULE = "=" * 78
@@ -20,8 +20,9 @@ class Log:
     def __init__(self, path: Path | None = None):
         self.path = path
 
-    def __call__(self, msg: str = "") -> None:
-        print(msg)
+    def __call__(self, msg: str = "", echo: bool = True) -> None:
+        if echo:
+            print(msg)
         if self.path is not None:
             with self.path.open("a") as f:
                 f.write(msg + "\n")
@@ -35,13 +36,22 @@ def ax_count(items: list[Item]) -> int:
     return sum(1 for it in items if it.from_ax)
 
 
-def render_payload(goal: str, screen: Screen, items: list[Item], history: list[str], browser: str, email: str | None) -> str:
+def render_payload(
+    goal: str,
+    screen: Screen,
+    items: list[Item],
+    history: list[str],
+    browser: str,
+    email: str | None,
+    tried: list[str] | None = None,
+    guidance: Guidance | None = None,
+) -> str:
     """Exactly what goes to TypeSafe for this screen, plus a table of every item."""
     parts = [
         RULE,
         "STATE  (sent as `state`)",
         RULE,
-        json.dumps(base_state(goal, screen, items, history), indent=2),
+        json.dumps(base_state(goal, screen, items, history, tried, guidance), indent=2),
         "",
         RULE,
         "QUESTION kind  (Choice criteria)",
