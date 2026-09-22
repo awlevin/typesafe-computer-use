@@ -66,7 +66,7 @@ cp .env.example .env     # fill in the keys
 | `CLICKER_WRITER_BASE_URL` | no | send the writer to another endpoint; unset means `api.anthropic.com` |
 | `CLICKER_WRITER_API_KEY` | no | the key for `CLICKER_WRITER_BASE_URL`, if it checks one |
 | `CLICKER_WRITER_API` | no | what that endpoint speaks: `anthropic` (the default) or `openai` |
-| `CLICKER_WRITER_MODEL` | no | defaults to `claude-haiku-4-5` |
+| `CLICKER_WRITER_MODEL` | no | types text and proposes URLs; defaults to `claude-haiku-4-5` |
 | `CLICKER_ANSWER_MODEL` | no | reads the screen whenever the classifier stops; defaults to `claude-sonnet-5` |
 | `CLICKER_WRITER_VISION` | no | `false` for an answer model that reads text only; defaults to `true` |
 
