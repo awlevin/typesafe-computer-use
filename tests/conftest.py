@@ -1,4 +1,5 @@
-"""Shared fixtures, plus import-only stand-ins for the macOS-only modules.
+"""Shared fixtures, a guard that keeps every test off the real machine, and import-only
+stand-ins for the macOS-only modules.
 
 The suite is pure logic and should run on any OS. The platform adapter
 (`typesafe_computer_use.macos`, `typesafe_computer_use.perception`) imports
@@ -39,9 +40,11 @@ def _stub(name: str) -> types.ModuleType:
     return module
 
 
+REAL_ACCESSIBILITY = not _absent("ApplicationServices")
+
 if _absent("Quartz"):
     _stub("Quartz").kCGHIDEventTap = 0
-if _absent("ApplicationServices"):
+if not REAL_ACCESSIBILITY:
     _stub("ApplicationServices")
 if _absent("ocrmac"):
 
@@ -57,7 +60,34 @@ if _absent("ocrmac"):
 import pytest  # noqa: E402
 from PIL import Image  # noqa: E402
 
+from typesafe_computer_use import cli, macos  # noqa: E402
 from typesafe_computer_use.models import Item, Screen  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def no_real_machine(monkeypatch):
+    """No test reaches the computer it runs on, whoever wrote it.
+
+    The suite runs on the developer's own Mac, often while they use it. Every call that would
+    move the pointer, press a key, run AppleScript (which opens apps and URLs), capture the
+    screen, open a file, or act on another app's accessibility element refuses here, so a test
+    that forgot to patch one fails instead of taking over the machine. A test that needs one
+    patches it itself, after this. The pointer reads as mid-screen, never the abort corner.
+    """
+
+    def refuse(what: str):
+        def call(*args, **kwargs):
+            raise RuntimeError(f"a test reached the real machine through {what}; patch it in the test")
+
+        return call
+
+    for name in ("_post", "osascript", "screenshot"):
+        monkeypatch.setattr(macos, name, refuse(f"macos.{name}"))
+    monkeypatch.setattr(macos, "mouse_location", lambda: (500.0, 500.0))
+    monkeypatch.setattr(cli, "subprocess", SimpleNamespace(run=refuse("subprocess.run in cli")))
+    if REAL_ACCESSIBILITY:
+        for name in ("AXUIElementPerformAction", "AXUIElementSetAttributeValue"):
+            monkeypatch.setattr(macos.AS, name, refuse(f"ApplicationServices.{name}"))
 
 
 @pytest.fixture
