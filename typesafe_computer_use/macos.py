@@ -11,6 +11,7 @@ import tempfile
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
+from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 
@@ -21,7 +22,7 @@ from PIL import Image
 from .config import ABORT_CORNER_PX
 from .models import Abort, AxNode, Field
 
-KEYCODES = {"return": 36, "tab": 48, "escape": 53, "a": 0, "delete": 51}
+KEYCODES = {"return": 36, "tab": 48, "escape": 53, "a": 0, "delete": 51, "[": 33}
 MIN_WINDOW_SIDE_PT = 50.0  # anything smaller is a palette or a shadow, not the window being worked in
 
 # ------------------------------------------------------------------ escape hatch
@@ -57,46 +58,47 @@ def _post(event) -> None:
     time.sleep(0.04)
 
 
+def _down_then_up(event: Callable[[bool], object]) -> None:
+    """Post the down event, then the up event even when the down is interrupted, so nothing stays held."""
+    try:
+        _post(event(True))
+    finally:
+        _post(event(False))
+
+
 def click_at(point: tuple[float, float]) -> None:
-    # Check before moving: the synthetic move would otherwise erase a corner abort.
+    # Check before moving: the synthetic move would otherwise take the pointer out of the abort corner.
     check_abort()
     _post(Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, point, Quartz.kCGMouseButtonLeft))
     check_abort()
-    try:
-        _post(Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseDown, point, Quartz.kCGMouseButtonLeft))
-    finally:
-        _post(Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseUp, point, Quartz.kCGMouseButtonLeft))
+    kinds = {True: Quartz.kCGEventLeftMouseDown, False: Quartz.kCGEventLeftMouseUp}
+    _down_then_up(lambda down: Quartz.CGEventCreateMouseEvent(None, kinds[down], point, Quartz.kCGMouseButtonLeft))
 
 
 def press(key: str, command: bool = False) -> None:
     check_abort()
     code = KEYCODES[key]
 
-    def send(down: bool) -> None:
-        event = Quartz.CGEventCreateKeyboardEvent(None, code, down)
+    def event(down: bool):
+        e = Quartz.CGEventCreateKeyboardEvent(None, code, down)
         if command:
-            Quartz.CGEventSetFlags(event, Quartz.kCGEventFlagMaskCommand)
-        _post(event)
+            Quartz.CGEventSetFlags(e, Quartz.kCGEventFlagMaskCommand)
+        return e
 
-    try:
-        send(True)
-    finally:
-        send(False)
+    _down_then_up(event)
+
+
+def _unicode_key(ch: str, down: bool):
+    event = Quartz.CGEventCreateKeyboardEvent(None, 0, down)
+    Quartz.CGEventKeyboardSetUnicodeString(event, len(ch), ch)
+    return event
 
 
 def type_text(text: str) -> None:
+    """One character at a time, checking the abort corner before each."""
     for ch in text:
         check_abort()
-
-        def send(down: bool, ch: str = ch) -> None:
-            event = Quartz.CGEventCreateKeyboardEvent(None, 0, down)
-            Quartz.CGEventKeyboardSetUnicodeString(event, len(ch), ch)
-            _post(event)
-
-        try:
-            send(True)
-        finally:
-            send(False)
+        _down_then_up(partial(_unicode_key, ch))
 
 
 def clear_field() -> None:
@@ -348,6 +350,21 @@ def off_display(frame: Frame | None, display_w_pt: float, display_h_pt: float) -
     return x >= display_w_pt or y >= display_h_pt or x + w <= 0 or y + h <= 0
 
 
+def center_on_display(frame: Frame | None, display_w_pt: float, display_h_pt: float) -> bool:
+    """Whether a frame's centre falls on the display. Chromium pages report a giant `shell` frame
+    that starts tens of thousands of points above the viewport yet crosses it, so `off_display`
+    alone lets it through as partially visible, and clicking it would aim far off the screen.
+    A frameless or zero-size frame claims nothing (an application element, a closed menu), and its
+    centre is meaningless, so those pass.
+    """
+    if frame is None:
+        return True
+    x, y, w, h = frame
+    if w <= 0 or h <= 0:
+        return True
+    return 0 <= x + w / 2 < display_w_pt and 0 <= y + h / 2 < display_h_pt
+
+
 def node_identity(node) -> object:
     """Accessibility elements hash by the element they wrap, so two fetches of one control compare
     equal; anything unhashable (a fake node in a test) falls back to object identity."""
@@ -444,7 +461,9 @@ def walk_actionable(
         emitted = False
         duplicate = inherited and parent_emitted  # the parent already stands for this label
         nameless_group = role == "AXGroup" and not own_label  # a Chromium layout box, not a control
-        visible = not hidden and clickable(frame)
+        # A click lands on the centre, so a node centred off the display is no item, though it
+        # crosses the display. It stays reachable by AXPress, and its children are judged as their own.
+        visible = not hidden and clickable(frame) and center_on_display(frame, display_w_pt, display_h_pt)
         if label and not duplicate and not nameless_group:
             if visible:
                 pressable = AX_PRESS in actions(node)

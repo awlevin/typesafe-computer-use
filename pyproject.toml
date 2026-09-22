@@ -1,6 +1,6 @@
 [project]
 name = "typesafe-computer-use"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cheap, fast computer use on macOS: deterministic screen state, a TypeSafe classifier for every decision, a writer model only for free text."
 readme = "README.md"
 license = "MIT"
@@ -9,7 +9,7 @@ requires-python = ">=3.12"
 authors = [{ name = "Aaron Levin" }]
 keywords = ["computer-use", "automation", "ocr", "typesafe", "macos", "agents"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Environment :: MacOS X",
     "Intended Audience :: Developers",
     "Operating System :: MacOS",
@@ -21,6 +21,7 @@ classifiers = [
 dependencies = [
     "anthropic==1.6.0",
     "ocrmac==1.0.1",
+    "openai==2.54.0",
     "pyobjc-framework-ApplicationServices==12.2.2",
     "pyobjc-framework-Quartz==12.2.2",
     "typesafe-sdk==0.6.0",
@@ -47,6 +48,7 @@ packages = ["typesafe_computer_use"]
 [tool.ruff]
 line-length = 130
 target-version = "py312"
+extend-exclude = [".agents", ".claude", ".private"]  # local agent folders: worktrees with their own venvs, links that may dangle
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
