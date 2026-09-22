@@ -6,7 +6,10 @@ set filtering, change detection and the step loop are all testable in CI.
 
 from __future__ import annotations
 
+import pytest
+
 from typesafe_computer_use.browser import act
+from typesafe_computer_use.browser.cdp import CDPError, local_debugger_url
 from typesafe_computer_use.browser.decide import available_actions
 from typesafe_computer_use.browser.perceive import INTERACTIVE_JS, Element, perceive
 
@@ -174,3 +177,17 @@ def test_observe_with_no_baseline_just_perceives():
     session = StubSession([page_dict(items=[element_dict()])])
     page, _, changed = act.observe_until_changed(session, None)
     assert changed and page.items
+
+
+# ------------------------------------------------------------------ cdp
+def test_the_session_only_connects_to_this_chromes_loopback_port():
+    url = "ws://127.0.0.1:9222/devtools/page/ABC"
+    assert local_debugger_url(url, 9222) == url
+    for other in (
+        "ws://127.0.0.1:9333/devtools/page/ABC",
+        "ws://10.0.0.5:9222/devtools/page/ABC",
+        "ws://evil.test:9222/devtools/page/ABC",
+        "wss://127.0.0.1:9222/devtools/page/ABC",
+    ):
+        with pytest.raises(CDPError):
+            local_debugger_url(other, 9222)

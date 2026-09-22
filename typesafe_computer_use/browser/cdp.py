@@ -20,6 +20,7 @@ import subprocess
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,18 @@ def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return int(s.getsockname()[1])
+
+
+def local_debugger_url(url: str, port: int) -> str:
+    """A page's debugger URL, only when it points back at this Chrome's own loopback port.
+
+    The port was free when it was picked, but another process could take it before Chrome
+    does and answer /json/list itself. The session then connects nowhere but here.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "ws" or parsed.hostname != "127.0.0.1" or parsed.port != port:
+        raise CDPError(f"debugger URL is not this Chrome's loopback port {port}: {url!r}")
+    return url
 
 
 def _get_json(url: str, timeout: float = 5.0) -> Any:
@@ -108,6 +121,7 @@ class Chrome:
                 return self
             except (urllib.error.URLError, OSError, json.JSONDecodeError):
                 time.sleep(0.1)
+        self.close()  # `with` never reaches __exit__ when __enter__ raises
         raise CDPError(f"Chrome did not expose CDP on port {self.port} within {timeout}s")
 
     def page_target(self, timeout: float = 10.0) -> str:
@@ -115,7 +129,7 @@ class Chrome:
         while time.time() < deadline:
             for target in _get_json(f"http://127.0.0.1:{self.port}/json/list"):
                 if target.get("type") == "page" and target.get("webSocketDebuggerUrl"):
-                    return str(target["webSocketDebuggerUrl"])
+                    return local_debugger_url(str(target["webSocketDebuggerUrl"]), self.port)
             time.sleep(0.1)
         raise CDPError("no page target available")
 
