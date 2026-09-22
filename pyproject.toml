@@ -20,7 +20,6 @@ classifiers = [
 ]
 dependencies = [
     "anthropic==1.6.0",
-    "openai>=2,<3",
     "ocrmac==1.0.1",
     "pyobjc-framework-ApplicationServices==12.2.2",
     "pyobjc-framework-Quartz==12.2.2",
@@ -48,6 +47,7 @@ packages = ["typesafe_computer_use"]
 [tool.ruff]
 line-length = 130
 target-version = "py312"
+extend-exclude = [".agents", ".claude", ".private"]  # local agent folders: worktrees with their own venvs, links that may dangle
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
