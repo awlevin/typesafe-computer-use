@@ -6,7 +6,11 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-PHASE_ORDER = ("capture", "screenshot", "app", "field", "url", "ocr", "ax", "decide", "act", "total")
+PHASE_ORDER = ("capture", "screenshot", "app", "window", "field", "url", "ocr", "ax", "decide", "act", "total")
+# Neither of these is seconds: both print on the ocr phase rather than as phases of their own.
+OCR_REGION_PCT = "ocr_region_pct"  # share of the capture handed to Vision
+OCR_RECTS = "ocr_rects"  # how many rectangles it took, 0 for a full read or for nothing to read
+EXTRAS = (OCR_REGION_PCT, OCR_RECTS)
 
 
 @contextmanager
@@ -27,9 +31,23 @@ def ordered(timing: dict[str, float]) -> list[tuple[str, float]]:
 
 
 def format_timing(timing: dict[str, float]) -> str:
-    """One log line. A zero `act` means the step never acted, so it is left out."""
-    shown = [(name, s) for name, s in ordered(timing) if not (name == "act" and s == 0)]
-    return "  timing: " + "  ".join(f"{name} {seconds:.2f}s" for name, seconds in shown)
+    """One log line. A zero `act` means the step never acted, so it is left out.
+
+    What Vision was given rides on the `ocr` phase: `ocr 0.31s (22% of screen, 2 rects)`. The rect
+    count is left off a full read and a step with nothing to re-read, where it says nothing.
+    """
+    shown = [(name, s) for name, s in ordered(timing) if name not in EXTRAS and not (name == "act" and s == 0)]
+    parts = [f"{name} {seconds:.2f}s" + (ocr_note(timing) if name == "ocr" else "") for name, seconds in shown]
+    return "  timing: " + "  ".join(parts)
+
+
+def ocr_note(timing: dict[str, float]) -> str:
+    """What the ocr phase read, in parentheses, or nothing when the step did not record it."""
+    pct = timing.get(OCR_REGION_PCT)
+    if pct is None:
+        return ""
+    rects = int(timing.get(OCR_RECTS) or 0)
+    return f" ({pct:.0f}% of screen" + (f", {rects} rect{'' if rects == 1 else 's'})" if rects else ")")
 
 
 def summarize(timings: list[dict[str, float]]) -> dict:

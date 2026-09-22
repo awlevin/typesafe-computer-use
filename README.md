@@ -12,13 +12,17 @@
 </p>
 
 **typesafe-computer-use** drives a Mac toward a goal you type in plain English, for about a
-fiftieth of a cent per step. It never sends a screenshot to a big model. Instead it
-reads the screen deterministically, asks a small classifier which action comes next,
-and only calls a writing model when a text field genuinely needs free text.
+fiftieth of a cent per step. It reads the screen deterministically, asks a small classifier
+which action comes next, and only calls a writing model when a text field genuinely needs
+free text or the classifier has stopped and the screen needs reading.
 
 ```
 clicker "go to techcrunch and take me to the checkout page for the cheapest tickets to their next upcoming event" --act
 ```
+
+> **Beta.** This is under heavy development. Expect rough edges, and expect settings and
+> behavior to change between 0.x [releases](https://github.com/awlevin/typesafe-computer-use/releases).
+> It drives your real mouse and keyboard, so start with a dry run.
 
 ## Why
 
@@ -60,10 +64,47 @@ cp .env.example .env     # fill in the keys
 | variable | required | purpose |
 |---|---|---|
 | `TYPESAFE_API_KEY` | yes | every decision |
-| `ANTHROPIC_API_KEY` | no | `type_text` and writer-proposed URLs |
+| `ANTHROPIC_API_KEY` | no | `type_text`, writer-proposed URLs, and the final answer |
 | `CLICKER_EMAIL` | no | enables the `type_email` action |
 | `CLICKER_BROWSER` | no | defaults to `Google Chrome` |
-| `CLICKER_WRITER_MODEL` | no | defaults to `claude-haiku-4-5` |
+| `CLICKER_WRITER_BASE_URL` | no | send the writer to another endpoint; unset means `api.anthropic.com` |
+| `CLICKER_WRITER_API_KEY` | no | the key for `CLICKER_WRITER_BASE_URL`, if it checks one |
+| `CLICKER_WRITER_API` | no | what that endpoint speaks: `anthropic` (the default) or `openai` |
+| `CLICKER_WRITER_MODEL` | no | types text and proposes URLs; defaults to `claude-haiku-4-5` |
+| `CLICKER_ANSWER_MODEL` | no | reads the screen whenever the classifier stops; defaults to `claude-sonnet-5` |
+| `CLICKER_WRITER_VISION` | no | `false` for an answer model that reads text only; defaults to `true` |
+
+**Other models.** Point `CLICKER_WRITER_BASE_URL` at any endpoint that speaks the Anthropic
+Messages API or, with `CLICKER_WRITER_API=openai`, OpenAI's Chat Completions API: LM Studio,
+Ollama, vLLM, a LiteLLM proxy, DeepSeek. Name the models it serves. The full request URL works as
+well as the root; for the OpenAI API keep the `/v1`. Such an endpoint may ignore structured-output
+parameters, so the schema is also spelled out in the prompt, and code fences or a sentence around
+the JSON are tolerated. On the OpenAI API a `json_schema` response format is asked for first, then
+`json_object`, then none, stepping down only when the endpoint refuses one. Thinking is turned off,
+since a model that thinks by default spends the writer's small token budgets on it and returns no
+text. The answer model reads a screenshot; for a model that reads text only, set
+`CLICKER_WRITER_VISION=false` and it gets the screen's text alone. A reply that cannot be read
+refuses the step it was for, and the run goes on.
+
+Keys never cross over: `CLICKER_WRITER_API_KEY` goes only to `CLICKER_WRITER_BASE_URL`, and
+`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` never go there. On the Anthropic API it is sent in both
+the `x-api-key` and `Authorization` headers, since proxies differ. Leave it empty for an endpoint
+that checks no key.
+
+```
+# LM Studio, either of its two APIs
+CLICKER_WRITER_BASE_URL=http://localhost:1234
+CLICKER_WRITER_MODEL=qwen3.8-flash-next
+CLICKER_ANSWER_MODEL=qwen3.8-flash-next
+
+# any OpenAI-compatible server
+CLICKER_WRITER_API=openai
+CLICKER_WRITER_BASE_URL=https://api.deepseek.com/v1
+CLICKER_WRITER_API_KEY=sk-...
+CLICKER_WRITER_MODEL=deepseek-v4.1-flash
+CLICKER_ANSWER_MODEL=deepseek-v4.1-flash
+CLICKER_WRITER_VISION=false
+```
 
 Grant your terminal **Screen Recording** and **Accessibility** in System Settings >
 Privacy & Security. Without the first, captures are wallpaper. Without the second,
@@ -73,8 +114,9 @@ synthetic clicks are silently dropped, and `--act` refuses to start.
 
 ```
 uv run clicker "open the Playground"                 # dry run: one step, prints what it would do
-uv run clicker "open the Playground" --act           # drives the machine, up to 12 steps
+uv run clicker "open the Playground" --act           # drives the machine, up to 100 steps
 uv run clicker "log in" --act --steps 20 --delay 3   # longer and slower
+uv run clicker "log in" --act --handoffs 0           # the classifier alone: its first stop ends the run
 uv run clicker-inspect "any goal"                    # 3-2-1, capture, open the annotated screen + payload
 ```
 
@@ -82,8 +124,53 @@ Clear the terminal first. It is on screen, so its text is OCR input.
 
 **Stopping a live run.** Ctrl-C when the terminal has focus, or slam the mouse into the
 top-left corner of the screen from any app. The loop also stops itself on `done` or
-`none`, on confidence under `--min-confidence` (0.4), after two consecutive no-ops, or
-at `--steps`.
+`none`, on confidence under `--min-confidence` (0.4), when it stalls, or at `--steps`. Each
+of those stops goes to the writer, which answers and may hand the run back (below).
+
+**Stalls.** Nothing in an action's description says what came of it; only the next capture
+does. So each step keeps a signature of the screen (the app, the page, the text on it) and
+the loop stops after three actions in a row that left the screen as it was (a refused
+action, a wait on a page still loading, a scroll that has run out of page) or after two in a
+row that were already taken on the same screen earlier in the run (a click that does
+nothing, or a cycle through two pages). Two captures count as the same screen when at most
+one line differs, and that one is one line in ten or fewer: a clock or a ticker does not
+hide a stall, and a two-line modal on a dense page is not mistaken for nothing happening.
+When more than that changes every step, a run that is getting nowhere runs to `--steps`:
+the rules err toward running on, never toward stopping a run that is making progress.
+
+**The answer.** When the classifier stops, the writer reads the screen it stopped on
+and prints the result: the information the goal asked for, or where things stand and
+the next step when the screen does not hold it. A dry run that would have acted, and
+an aborted run, print no answer.
+
+**The hand-off.** A stop is not the end when the goal is not reached. One sentence of
+goal does not say which of two good moves comes first ("cheapest, and here in under a
+week": open the cheapest listing, or filter by delivery?), and a classifier split
+between them reads as low confidence. So the writer's answer may carry a **focus**,
+one move in terms of the screen ("Click the 'Arrives in 2-4 days' filter"), and the
+classifier goes back to work with the goal and the focus both in its state. On the
+capture that stopped such a run at 0.39, the same classifier picks the filter at
+0.92 under that focus. It may instead carry a **question**, put to you in the terminal
+when there is something only you can say ("13 or 15 inch?"); your reply joins the
+state for the rest of the run, the writer reads the screen again with it, and the app
+you were in comes back to the front. An empty reply declines, and the answer stands.
+The writer never picks a click: every action is still the classifier's.
+
+The exchange cannot go round on itself. A focus the classifier takes no action under
+leaves the answer it came with standing, without a second reading of the same screen.
+`--handoffs` (10) bounds the trips, three questions bound the asking, and a stop on
+the last step is final. A `done` the writer does not see on the screen is sent back
+like any other stop.
+
+**Who did the work.** Every run ends by counting the requests each model took:
+
+```
+calls: classifier 14 (82%, 3.9s)  writer 3 (18%, 21.4s)  handoffs 1  questions 0
+```
+
+The classifier's share is the number the design stands on. A task it falls on is a
+task the writer had to steer at every turn, and the fix belongs in the state the
+classifier reads, not in more hand-offs.
 
 ## Browser backend: DOM perception, no OCR
 
@@ -169,7 +256,8 @@ One tab, one page target, no iframes or shadow-DOM piercing.
 
 ```
 screencapture ─► Vision OCR ─► merge lines into blocks ─► drop lines echoing the goal
-accessibility ─► actionable elements (role, label, frame), pruned to the display
+accessibility ─► actionable elements (role, label, frame), pruned to the display,
+                 the labelled pressable ones it pruned kept as off-screen controls
                      │
                      └─► one numbered list of items, each carrying its source
                      │
@@ -178,14 +266,17 @@ AppleScript   ─► frontmost app and pid, active tab URL
 clock         ─► local date and time
 dates.py      ─► "dated 2026-10-13 (in 27 days)" on any block containing a date,
                  "near a line dated ..." on its neighbours
+layout        ─► "in the row of ..." on any label that appears more than once
+runner.py     ─► the actions already tried on this same screen, each of which led back here
                      │
                      ▼
-        one TypeSafe request, three Choices
-        ┌──────────────────────────────────────────────────────┐
-        │ kind  : click_item | open_site | type_text | scroll… │
-        │ item  : which item (used only for click_item)        │
-        │ site  : which catalog site (used only for open_site) │
-        └──────────────────────────────────────────────────────┘
+        one TypeSafe request, three Choices, four with off-screen controls
+        ┌────────────────────────────────────────────────────────────┐
+        │ kind      : click_item | use_browser | type_text | scroll… │
+        │ item      : which item (used only for click_item)          │
+        │ site      : which website (used only for use_browser)      │
+        │ offscreen : which hidden control (only for press_offscreen)│
+        └────────────────────────────────────────────────────────────┘
                      │
                      ▼
         deterministic action ─► wait ─► next step
@@ -194,12 +285,38 @@ dates.py      ─► "dated 2026-10-13 (in 27 days)" on any block containing a d
 Items carry where they came from: `ocr` for a text block, `ax` for a control the app
 declared, `ax+ocr` when both found the same thing. An `ax` item reads as
 `button 'Share' (top-right)` in the criteria, so the classifier can tell a real control
-from a line of text.
+from a line of text. A label that appears more than once carries its row as well:
+`'Buy' (middle-right; in the row of 'Coldplay', 'Oct 2')`, since the label says nothing
+about which and the layout does.
 
 Splitting the decision into three questions keeps screen noise out of the action
 choice. Every stall found while building this came from two options that meant the
 same thing. Confidence measures concentration, so overlapping options always read as
 doubt. Keep the action set mutually exclusive.
+
+### OCR cost
+
+Vision is about two thirds of a step, and it charges by the amount of text rather than
+the number of pixels, so the only real saving is reading less of the screen.
+
+- **Crop.** Each step reads the frontmost window with an 8 pt margin, plus the menu bar
+  strip over the same columns, clamped to the display. Text on the desktop and in
+  background windows is noise to the decision. Clipping the strip to the window's width is
+  what makes the crop pay on a full-height window. The cost: the clock and the menu extras
+  to the right of the window go unread. They stay clickable through the accessibility tree.
+- **Reuse.** The capture is compared with the previous one at 1/8 scale, in 256 px tiles.
+  Unchanged tiles keep the lines they produced last step. The changed tiles are clustered
+  into blobs, sides and corners counting as touching, and each blob becomes a rectangle
+  read on its own. Scattered change is the ordinary case, a clock digit plus one repaint,
+  and one rectangle around both would span the display. Each rectangle grows until no known
+  line straddles its edge, because a crop through a line returns the half it can see; ones
+  that meet after growing merge, and more than four merge by closest pair down to four.
+  Past 60% changed tiles, past 60% of the region in summed rectangle area, or on an app
+  switch or a window move, the whole region is read instead.
+
+The timing line says how much was read, and in how many pieces: `ocr 0.31s (22% of screen,
+2 rects)`. A replay (`--image`) always reads the whole image and never reuses, so an offline
+repro matches the original run.
 
 ### Accessibility tree
 
@@ -226,31 +343,62 @@ Walks measured here: Finder 152 controls in 0.08 s, Chrome 172 in 0.59 s. The as
 handshake attributes (`AXManualAccessibility`, `AXEnhancedUserInterface`) are unsupported
 on this macOS, so nothing relies on them.
 
+#### Off-screen controls
+
+`AXPress` does not need an element to be visible. Notes selects a row parked thousands of
+points below the display, Chromium delivers a click to a link it clamped to a 1 px sliver
+because the page is scrolled past it, and an auto-hidden Dock hands over all 37 of its
+items from 5 pt below the bottom edge. So the same walk keeps the labelled, pressable nodes
+it pruned, and offers them as a separate capped list rather than mixing them into the items:
+nothing on the capture points at them, and a mouse click would land somewhere else entirely.
+
+The list is deduplicated by role and label, drops any label the visible items already carry,
+and stops at 120 controls, after which those subtrees are pruned as before, so the walk costs
+what it always did. It is offered only when it is not empty, as a `press_offscreen` action
+plus an `offscreen` question, and the step log counts it next to `ax=`. A refusal is the end
+of it: there is no pixel to fall back on, so it reads as a no-op. What a walk finds depends
+on the app, and the node and time caps bind first on a big tree: Notes and Chrome spend all
+4000 nodes on what is already on screen and report nothing hidden.
+
 ### Action space
 
 | key | does |
 |---|---|
 | `click_item` | press the element through the accessibility tree when the item came from it, so the press lands on the control rather than on whatever covers it; a mouse click at the center of the box otherwise, and as the fallback when the press is refused |
-| `open_site` | AppleScript `open location` for a `SITES` catalog entry, or a URL the writer proposes |
-| `switch_to_browser` | bring the browser forward to continue with a page already open there |
+| `press_offscreen` | `AXPress` a labelled control the app exposes but does not show, chosen from the off-screen list; offered only when that list is not empty, and a refusal counts as a no-op since there is no pixel to fall back on |
+| `use_browser` | go to the browser, showing the website the `site` answer names: `none` brings it forward on the page already open there, a `SITES` catalog key opens that URL through AppleScript `open location`, and `other` opens a URL the writer proposes |
 | `type_text` | the writer composes the string; it is set on the focused element through the accessibility tree, with keystrokes as the fallback when the value does not read back, and a TypeSafe Noul then checks the field's value |
 | `type_email` | fills in `$CLICKER_EMAIL` the same way; refused unless a text field is focused |
 | `press_enter`, `press_escape` | keyboard |
+| `go_back` | Cmd-[, the browser's Back, when the last click led somewhere unhelpful |
 | `scroll_down`, `scroll_up` | 10 lines, after parking the cursor over the frontmost window |
-| `wait` | screen still loading |
+| `wait` | screen still loading: 3 s, then the step's own delay, so three waits cover a slow page |
 | `done`, `none` | stop |
 
 ### Where free text comes from
 
-The classifier never generates text. The writer model runs in two places, each with a
-small packet and a structured reply:
+The classifier never generates text. The writer model runs in three places, each with a
+small packet and a structured reply. Each packet also carries the current focus and what
+the user said, once there are any:
 
 - **`type_text`** receives the goal, recent actions, the focused field's label and
   placeholder, and the OCR lines near the field. It returns `{fill, text}`. Credential
-  fields come back `fill: false` and nothing is typed. After typing, a Noul scores
-  whether the field now holds a sensible value. Under 0.5 the field is cleared.
-- **`open_site`** with no catalog match receives the goal and returns `{ok, url}`.
+  fields come back `fill: false` and nothing is typed. The text is set as the field's
+  value where the element accepts one; otherwise the field is emptied and the text
+  typed, since keystrokes land after whatever it already holds. After typing, a Noul
+  scores whether the field now holds a sensible value. Under 0.5 the field is cleared.
+- **`use_browser`** with `site: other` receives the goal and returns `{ok, url}`.
   Code rejects anything that is not a clean https URL with a hostname.
+- **The answer**, each time the classifier stops. It receives the goal, every action
+  taken, why the run stopped, the earlier stops with the focus given at each, whether
+  anybody is at the terminal to be asked, the text of the last screen, the capture itself, because
+  OCR misreads a letter here and there and drops layout, and the text of the distinct
+  screens before it, newest first up to 600 lines, because the goal may ask for a price
+  that was on the listing and not on the checkout. It returns `{achieved, answer, focus, question}`,
+  and is told to take the answer from those screens and the user's replies alone, to give a focus
+  as one move and not a plan, and never to ask for a credential. When an action ran after the last capture, the
+  screen is captured again first. This one call uses `CLICKER_ANSWER_MODEL`, a stronger
+  reader than the per-step writer.
 
 Passwords are never typed. Rely on the browser's password manager or an SSO button
 the OCR can read.
@@ -261,16 +409,18 @@ Every run writes `runs/<timestamp>/` so a stall can be replayed and fixed offlin
 
 | file | contents |
 |---|---|
-| `run.log`, `run.json` | everything printed; goal, outcome, seconds, every action, config, and `timing` (mean and max seconds per phase, with `steps_timed`) |
-| `step-NN-raw.png` | the capture |
-| `step-NN.png` | items numbered in blue, accessibility ones orange, the chosen one red, the focused field green |
-| `step-NN-payload.txt` | the exact `state` and criteria sent to TypeSafe, then every item with source, role, box, click point, confidence |
-| `step-NN-answers.json` | every probability the classifier returned, plus `timing` for that step |
+| `run.log`, `run.json` | everything printed; goal, outcome (`done`, `nothing helps`, `low confidence`, `stalled`, `step limit`, `dry run`, `aborted`, `crashed`), `answer` and `goal_achieved`, seconds, `calls` (requests, share and seconds per model), `handoffs` (step, why the classifier stopped, the focus given), `questions` and replies, every action, config, and `timing` (mean and max seconds per phase, with `steps_timed`) |
+| `step-NNN-review.json` | what the writer made of a stop on that step: each answer, focus or question, your reply, and whether the run was handed back |
+| `answer-raw.png` | the capture the answer was read from, when an action made the last step's capture stale |
+| `step-NNN-raw.png` | the capture |
+| `step-NNN.png` | items numbered in blue, accessibility ones orange, the chosen one red, the focused field green |
+| `step-NNN-payload.txt` | the exact `state` and criteria sent to TypeSafe, then every item with source, role, box, click point, confidence, then the off-screen controls |
+| `step-NNN-answers.json` | every probability the classifier returned, the off-screen controls it was offered, the actions already tried on that screen, the idle and repeat counts the stop rules stood at, plus `timing` for that step |
 
 Each step also logs what it cost, so a slow phase is obvious:
 
 ```
-  timing: capture 0.31s  screenshot 0.28s  app 0.01s  field 0.01s  url 0.01s  ocr 0.82s  ax 0.06s  decide 0.21s  act 0.05s  total 1.45s
+  timing: capture 0.31s  screenshot 0.28s  app 0.01s  window 0.02s  field 0.01s  url 0.01s  ocr 0.31s (22% of screen)  ax 0.06s  decide 0.21s  act 0.05s  total 0.95s
 ```
 
 `capture` covers the four round trips under it; `act` is left out when the step did not act.
@@ -278,7 +428,7 @@ Each step also logs what it cost, so a slow phase is obvious:
 Replay a saved capture as if it were live, without touching the screen:
 
 ```
-uv run clicker "same goal" --image runs/<ts>/step-03-raw.png --app "Google Chrome" --url "https://example.com/"
+uv run clicker "same goal" --image runs/<ts>/step-003-raw.png --app "Google Chrome" --url "https://example.com/"
 ```
 
 ## Layout
@@ -287,13 +437,18 @@ uv run clicker "same goal" --image runs/<ts>/step-03-raw.png --app "Google Chrom
 typesafe_computer_use/
   macos.py        the only module that touches Quartz, AX, AppleScript   (platform adapter)
                   including the bounded walk for actionable elements
-  perception.py   capture, OCR, block merging, goal-echo filter, the
-                  accessibility item source, and the merge of the two
+  perception.py   capture, OCR, the read region and the changed-tile cache,
+                  block merging, goal-echo filter, the accessibility item
+                  source, and the merge of the two
   dates.py        date parsing and "in N days" hints
   decide.py       state, criteria, the three-Choice request, the Noul check
-  writer.py       the writer model, structured replies, URL validation
+  writer.py       the writer model, structured replies, URL validation, the answer
+                  with its focus or question
+  openai_writer.py the writer's requests on an OpenAI-compatible endpoint
   actions.py      one handler per action, each returning a history line
-  runner.py       the step loop, run folder, stop rules
+  runner.py       the step loop, run folder, stop rules, the hand-off to the writer
+                  and back
+  calls.py        requests counted per model, at the two clients
   report.py       logging, annotated screenshots, payload dump
   timing.py       phase stopwatches, the timing line, run summary
   cli.py          `clicker` and `clicker-inspect`
@@ -306,8 +461,13 @@ typesafe_computer_use/
     report.py     run folder writing and offline replay
     bench.py      `clicker-bench`: DOM vs OCR, the step loop, replay
 tests/            pure logic: dates, merging, reading order, echo filter, config,
-                  decisions, the tree walk against a fake tree
-                  browser backend: parsing, action filtering, change detection, replay
+                  decisions, the tree walk against a fake tree; for the browser
+                  backend, parsing, action filtering, change detection, replay
+  world.py        a simulated computer: pages, controls, fields, and what each action
+                  does to them, driven by the real step loop with a policy as classifier
+  test_scenarios.py
+                  tasks of increasing difficulty on that computer, L1 upward; a failure
+                  here says the architecture cannot do that task
 ```
 
 A Linux port replaces `macos.py` with xdotool and AT-SPI, and swaps Vision OCR for
@@ -322,10 +482,16 @@ still wants the OCR path.
 
 - OCR only sees text, and the accessibility tree only covers apps that publish one.
   In a terminal, a canvas, or Spotify, an icon-only button reaches neither source.
-- Two identical labels get only a coarse region hint and split the vote.
+- Two identical labels in one row, or in no row at all, get only a coarse region hint and
+  split the vote. Ones in different rows are told apart by the text beside them.
 - Only the main display is captured.
+- A repeated action whose effect never shows on screen (a third "New note" in an app that
+  lists nothing) reads as a cycle and stops the run: the capture is the only witness.
 - Using the machine during an `--act` run fights it for focus and the cursor.
 - The site catalog is small on purpose; the writer covers the rest.
+- Stacked short lines merge into one item, so a list of checkboxes ("Arrives in 2-4
+  days", "Free Shipping", "Local Pickup") that the app does not publish through
+  accessibility is one click target, aimed at its middle.
 
 ## Development
 
@@ -334,7 +500,16 @@ uv run ruff check . && uv run ruff format --check .
 uv run pytest -q
 ```
 
-CI runs the same on macOS. See [CONTRIBUTING.md](CONTRIBUTING.md).
+CI runs the same on macOS, and the tests again on Linux: they are pure logic, and
+`tests/conftest.py` stands in for the platform modules where they cannot be installed.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Growing the architecture
+
+`tests/test_scenarios.py` is the place to show that a task is beyond the loop. Write the
+page graph and a policy for it, assert the outcome, and leave it failing with `xfail`
+until the loop can do it; then fix the loop, not the scenario. Every stop rule above was
+found or fixed that way.
 
 ## License
 
