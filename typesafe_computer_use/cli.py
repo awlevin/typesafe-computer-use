@@ -62,9 +62,15 @@ def main(argv: list[str] | None = None) -> None:
     _prepare()
     if args.act and not macos.accessibility_trusted():
         sys.exit("this terminal lacks Accessibility permission; grant it in System Settings > Privacy & Security")
-    writer = make_writer()
+    try:
+        writer = make_writer()
+        config.writer_vision()  # a bad value stops the run here, not at its first stop
+    except ValueError as e:
+        sys.exit(str(e))
     if writer is None:
-        print("writer disabled: no ANTHROPIC_API_KEY; type_text, writer-proposed URLs and the final answer need it")
+        print(
+            "writer disabled: no ANTHROPIC_API_KEY or CLICKER_WRITER_BASE_URL; type_text, writer-proposed URLs and the final answer need one"
+        )
     else:
         print(f"writer: {provider(writer)}")
 

@@ -7,7 +7,6 @@ import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
-import anthropic
 from typesafe_sdk import TypeSafeClient
 
 from . import macos
@@ -19,7 +18,7 @@ from .models import Abort, Guidance, Item, Screen, Signature, same_screen, signa
 from .perception import OcrCache, capture, perceive
 from .report import Log, annotate, ax_count, render_payload, top
 from .timing import format_timing, phase, summarize
-from .writer import Answer, compose_answer
+from .writer import Answer, WriterError, compose_answer
 
 # Two ways a run stalls, both read off the screen rather than off the history line, because an
 # action's description says what was attempted and only the next capture says what came of it.
@@ -159,7 +158,7 @@ def hand_off(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     if stopped is None:
         return False
     if ctx.writer is None:
-        log("\nno answer: the writer is disabled (set ANTHROPIC_API_KEY)")
+        log("\nno answer: the writer is disabled (set ANTHROPIC_API_KEY or CLICKER_WRITER_BASE_URL)")
         return False
     if state.handoffs and state.handoffs[-1].actions == len(state.history) and state.answer is not None:
         log(f"\nanswer ({verdict(state.answer)}; the focus led to no action, so the last answer stands):\n  {state.answer.text}")
@@ -172,7 +171,7 @@ def hand_off(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
         started = time.perf_counter()
         try:
             answer = review(cfg, ctx, state, stopped, can_ask)
-        except anthropic.APIError as e:
+        except WriterError as e:
             log(f"\nno answer: the writer failed ({e})")
             return False
         state.answer = answer

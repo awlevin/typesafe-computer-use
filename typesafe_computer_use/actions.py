@@ -6,14 +6,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-import anthropic
 from typesafe_sdk import TypeSafeClient
 
 from . import macos
 from .config import SITES
 from .decide import OFFSCREEN_PREFIX, Decision, row_mates, verify_typed
 from .models import Field, Guidance, Item, Screen
-from .writer import compose_text, compose_url
+from .writer import Writer, WriterError, compose_text, compose_url
 
 VERIFY_THRESHOLD = 0.5
 WAIT_SECONDS = 3.0  # what a wait adds to the settle delay every step already gets; three of them cover a slow page
@@ -25,7 +24,7 @@ class Context:
     browser: str
     email: str | None
     typesafe: TypeSafeClient
-    writer: anthropic.Anthropic | None
+    writer: Writer | None
     history: list[str]
     ask: Callable[[str], str] | None = None  # puts the writer's question to the user; None when nobody is there to answer
     guidance: Guidance = field(default_factory=Guidance)  # the runner replaces the context when the writer or the user adds to it
@@ -116,7 +115,10 @@ def _use_browser(decision: Decision, screen, items, ctx: Context) -> str:
     if url is None:
         if ctx.writer is None:
             return "use_browser refused: the site is outside the catalog and no writer is available to propose a URL"
-        url = compose_url(ctx.writer, ctx.goal, ctx.history, ctx.guidance)
+        try:
+            url = compose_url(ctx.writer, ctx.goal, ctx.history, ctx.guidance)
+        except WriterError as e:
+            return f"use_browser refused: the writer failed ({e})"
     if not url:
         return "use_browser refused: the writer proposed no usable URL for this goal"
     if macos.open_url(ctx.browser, url):
@@ -136,7 +138,10 @@ def _type_text(decision, screen: Screen, items, ctx: Context) -> str:
         return "type_text refused: no text field is focused"
     if ctx.writer is None:
         return "type_text refused: no writer available"
-    text = compose_text(ctx.writer, ctx.goal, screen, items, ctx.history, ctx.guidance)
+    try:
+        text = compose_text(ctx.writer, ctx.goal, screen, items, ctx.history, ctx.guidance)
+    except WriterError as e:
+        return f"type_text refused: the writer failed ({e})"
     if not text:
         return "type_text refused: writer declined to fill this field"
     how = fill_field(screen.field, text)

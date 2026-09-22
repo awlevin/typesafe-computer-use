@@ -7,6 +7,7 @@ import pytest
 from typesafe_computer_use import actions, macos
 from typesafe_computer_use.actions import click_item, fill_field, press_offscreen
 from typesafe_computer_use.models import AxNode, Field, Item
+from typesafe_computer_use.writer import make_writer
 
 
 @pytest.fixture
@@ -144,6 +145,27 @@ def test_use_browser_refuses_when_the_writer_proposes_nothing(screen, browser, m
     refusal = actions.perform(browsing("other"), screen, [], context(object()))
     assert refusal == "use_browser refused: the writer proposed no usable URL for this goal"
     assert browser == []
+
+
+@pytest.fixture
+def broken_writer(clean_env, endpoint):
+    """A real writer whose endpoint refuses every request."""
+    clean_env.setenv("CLICKER_WRITER_BASE_URL", endpoint.url)
+    endpoint.state["reject"] = lambda body: "model 'nope' not found"
+    return make_writer()
+
+
+def test_a_writer_that_fails_refuses_the_url_instead_of_ending_the_run(screen, browser, broken_writer):
+    refusal = actions.perform(browsing("other"), screen, [], context(broken_writer))
+    assert refusal.startswith("use_browser refused: the writer failed (") and "not found" in refusal
+    assert browser == []
+
+
+def test_a_writer_that_fails_refuses_the_text_instead_of_ending_the_run(screen, calls, broken_writer):
+    focused = replace(screen, field=field())
+    refusal = actions.perform(SimpleNamespace(chosen="type_text"), focused, [], context(broken_writer))
+    assert refusal.startswith("type_text refused: the writer failed (") and "not found" in refusal
+    assert calls == []
 
 
 def test_a_browser_that_does_not_come_to_the_front_is_a_no_op(screen, monkeypatch):

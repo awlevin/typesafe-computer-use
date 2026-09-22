@@ -11,9 +11,13 @@ are installed and nothing below is registered.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+import threading
 import types
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _absent(name: str) -> bool:
@@ -74,3 +78,85 @@ def make_item():
 def tmp_env(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("CLICKER_TEST_KEY", raising=False)
     return tmp_path
+
+
+WRITER_ENV = (
+    "CLICKER_WRITER_API",
+    "CLICKER_WRITER_BASE_URL",
+    "CLICKER_WRITER_API_KEY",
+    "CLICKER_WRITER_VISION",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_PROFILE",
+)
+
+
+@pytest.fixture
+def clean_env(monkeypatch):
+    """No writer configuration from the shell running the tests."""
+    for name in WRITER_ENV:
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+@pytest.fixture
+def endpoint():
+    """A writer endpoint on localhost, as a proxy or a local model would serve one.
+
+    It answers the Anthropic Messages API or OpenAI's Chat Completions API by path, records each
+    request with its headers, and replies with `state["reply"]`. `state["reject"]` may return an
+    error message for a request body, which then gets a 400, the way an endpoint refuses a parameter.
+    """
+    seen: list[dict] = []
+    state: dict = {"reply": '{"ok": true, "url": "https://example.com", "reason": ""}', "reject": lambda body: None}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
+            refusal = state["reject"](body)
+            if refusal:
+                status, out = 400, {"type": "error", "error": {"type": "invalid_request_error", "message": refusal}}
+            elif self.path.endswith("/chat/completions"):
+                status, out = (
+                    200,
+                    {
+                        "id": "chatcmpl-1",
+                        "object": "chat.completion",
+                        "created": 0,
+                        "model": body["model"],
+                        "choices": [
+                            {"index": 0, "message": {"role": "assistant", "content": state["reply"]}, "finish_reason": "stop"}
+                        ],
+                    },
+                )
+            else:
+                status, out = (
+                    200,
+                    {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": body["model"],
+                        "content": [{"type": "text", "text": state["reply"]}],
+                        "stop_reason": "end_turn",
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    },
+                )
+            data = json.dumps(out).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+    yield SimpleNamespace(url=f"http://127.0.0.1:{server.server_port}", seen=seen, state=state)
+    server.shutdown()
+    server.server_close()

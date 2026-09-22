@@ -6,33 +6,46 @@ import base64
 import io
 import json
 import os
-import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import anthropic
+import openai
 from PIL import Image
 
-from .config import answer_model, custom_writer_endpoint, writer_base_url, writer_model
+from .config import answer_model, custom_writer_endpoint, writer_api, writer_base_url, writer_model, writer_vision
 from .dates import now_context
 from .models import Guidance, Item, Screen
+from .openai_writer import OpenAIWriter
 from .perception import near_field
 
 ANSWER_IMAGE_EDGE = 1568  # the longest edge a vision model reads without shrinking the image itself
 PLACEHOLDER_KEY = "not-needed"  # an endpoint you host yourself does not check a key
 
 
-def make_writer() -> anthropic.Anthropic | None:
+type Writer = anthropic.Anthropic | OpenAIWriter  # both answer `messages.create` the Anthropic way
+
+
+class WriterError(Exception):
+    """The writer could not be reached, or answered with nothing usable. The step it served is refused."""
+
+
+def make_writer() -> Writer | None:
     """A client, or None when there is nothing to write with.
 
     A key only ever goes to the endpoint it belongs to. CLICKER_WRITER_BASE_URL (see
     config.writer_base_url) is paired with CLICKER_WRITER_API_KEY, or with a placeholder when that
     is unset, since an endpoint you host yourself checks no key. Otherwise the SDK reads the
-    ANTHROPIC_* key, token, and base URL as it always does.
+    ANTHROPIC_* key, token, and base URL as it always does. An endpoint that speaks OpenAI's API
+    (CLICKER_WRITER_API=openai) has no default to fall back on, so it must be named.
     """
     base_url = writer_base_url()
+    key = os.environ.get("CLICKER_WRITER_API_KEY") or PLACEHOLDER_KEY
+    if writer_api() == "openai":
+        if not base_url:
+            raise ValueError("CLICKER_WRITER_API=openai needs CLICKER_WRITER_BASE_URL, such as http://localhost:1234/v1")
+        return OpenAIWriter(base_url, key)
     if base_url:
-        key = os.environ.get("CLICKER_WRITER_API_KEY") or PLACEHOLDER_KEY
         # Proxies differ in which header they read, so the key goes in both. Passing any key at all
         # also keeps the SDK from adding ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN on its own.
         return anthropic.Anthropic(base_url=base_url, api_key=key, auth_token=key)
@@ -42,16 +55,16 @@ def make_writer() -> anthropic.Anthropic | None:
     return None
 
 
-def provider(writer: anthropic.Anthropic) -> str:
+def provider(writer: Writer) -> str:
     """Where the writer sends its requests, for logging. Credentials and query in the URL are left out."""
     url = writer.base_url
     port = f":{url.port}" if url.port else ""
     where = f"{url.scheme}://{url.host}{port}{url.path.rstrip('/')}"
-    return f"{where}  models: {writer_model()} (writing), {answer_model()} (answering)"
+    return f"{where} ({writer_api()} API)  models: {writer_model()} (writing), {answer_model()} (answering)"
 
 
 def _structured(
-    writer: anthropic.Anthropic,
+    writer: Writer,
     system: str,
     packet: dict,
     properties: dict,
@@ -71,34 +84,50 @@ def _structured(
         # Another endpoint may think by default, out of the same max_tokens: a 200-token call then
         # comes back with no text at all. Anthropic thinks only when asked.
         extra["thinking"] = {"type": "disabled"}
-    response = writer.messages.create(
-        model=model or writer_model(),
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": content}],
-        output_config={"format": {"type": "json_schema", "schema": schema}},
-        **extra,
-    )
-    return parse_json("".join(b.text for b in response.content if b.type == "text"))
+    try:
+        response = writer.messages.create(
+            model=model or writer_model(),
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": content}],
+            output_config={"format": {"type": "json_schema", "schema": schema}},
+            **extra,
+        )
+    except (anthropic.APIError, openai.APIError) as e:
+        raise WriterError(f"the request failed: {e}") from e
+    return checked(parse_json("".join(b.text for b in response.content if b.type == "text")), properties)
 
 
 def parse_json(text: str) -> dict:
-    """The JSON object out of a reply, as long as one is in there.
+    """The first JSON object in a reply, as long as one is in there.
 
     A model that was asked for JSON usually returns exactly that. Some wrap it in code fences or a
-    sentence, so the object itself is looked for rather than assumed to fill the whole reply.
+    sentence, so the object is looked for rather than assumed to fill the whole reply. A reply cut
+    off before its object closes holds none, and nothing is guessed out of it.
     """
-    stripped = text.strip()
-    fenced = re.search(r"```(?:json)?\s*(.+?)\s*```", stripped, re.DOTALL)
-    if fenced:
-        stripped = fenced.group(1).strip()
-    start, end = stripped.find("{"), stripped.rfind("}")
-    if start != -1 and end > start:
-        stripped = stripped[start : end + 1]
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"the writer answered without usable JSON: {text[:400]!r}") from e
+    decoder = json.JSONDecoder()
+    for start in (i for i, ch in enumerate(text) if ch == "{"):
+        try:
+            data, _ = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    raise WriterError(f"the writer answered without usable JSON: {text[:400]!r}")
+
+
+def checked(data: dict, properties: dict) -> dict:
+    """The reply with each field of its schema's type. Anthropic enforces the schema itself; another
+    endpoint may leave a field out or send a string where a flag belongs. A flag decides what happens
+    next, so one missing is an error. A missing string is empty, which every caller reads as nothing
+    to type, open, or say."""
+    out = dict(data)
+    for name, spec in properties.items():
+        if spec["type"] == "string" and name not in out:
+            out[name] = ""
+        if not isinstance(out.get(name), {"boolean": bool, "string": str}[spec["type"]]):
+            raise WriterError(f"the writer's reply has no {spec['type']} {name!r}: {json.dumps(data)[:400]}")
+    return out
 
 
 def _image_block(image: Image.Image) -> dict:
@@ -112,7 +141,7 @@ def _image_block(image: Image.Image) -> dict:
 
 
 def compose_text(
-    writer: anthropic.Anthropic,
+    writer: Writer,
     goal: str,
     screen: Screen,
     items: list[Item],
@@ -151,7 +180,7 @@ def valid_url(url: str) -> bool:
     return parsed.scheme == "https" and "." in parsed.netloc and not any(ch.isspace() for ch in url)
 
 
-def compose_url(writer: anthropic.Anthropic, goal: str, history: list[str], guidance: Guidance | None = None) -> str:
+def compose_url(writer: Writer, goal: str, history: list[str], guidance: Guidance | None = None) -> str:
     """The URL to open for this goal. Empty means no sensible site, or an invalid proposal."""
     data = _structured(
         writer,
@@ -211,7 +240,7 @@ ANSWER_SYSTEM = (
 
 
 def compose_answer(
-    writer: anthropic.Anthropic,
+    writer: Writer,
     goal: str,
     screen: Screen,
     items: list[Item],
@@ -255,7 +284,7 @@ def compose_answer(
         },
         max_tokens=1024,
         model=answer_model(),
-        image=screen.image,
+        image=screen.image if writer_vision() else None,
     )
     return Answer(
         text=data["answer"].strip(), achieved=data["achieved"], focus=data["focus"].strip(), question=data["question"].strip()

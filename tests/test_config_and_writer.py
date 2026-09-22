@@ -1,23 +1,11 @@
-import json
 import os
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
 
 from typesafe_computer_use.calls import Calls, MeteredWriter
 from typesafe_computer_use.config import custom_writer_endpoint, load_dotenv, writer_base_url
-from typesafe_computer_use.writer import compose_url, make_writer, parse_json, provider, valid_url
-
-WRITER_ENV = (
-    "CLICKER_WRITER_BASE_URL",
-    "CLICKER_WRITER_API_KEY",
-    "ANTHROPIC_BASE_URL",
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_PROFILE",
-)
+from typesafe_computer_use.writer import WriterError, compose_url, make_writer, parse_json, provider, valid_url
 
 
 def test_dotenv_sets_only_missing_keys(tmp_path, monkeypatch):
@@ -43,60 +31,14 @@ def test_dotenv_missing_file_is_fine(tmp_path):
         ("https://proxy.example.com/v1/messages/", "https://proxy.example.com"),
     ],
 )
-def test_the_writer_endpoint_accepts_any_of_its_spellings(given, expected, monkeypatch):
-    monkeypatch.setenv("CLICKER_WRITER_BASE_URL", given)
-    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+def test_the_writer_endpoint_accepts_any_of_its_spellings(given, expected, clean_env):
+    clean_env.setenv("CLICKER_WRITER_BASE_URL", given)
     assert writer_base_url() == expected
 
 
-def test_the_anthropic_base_url_is_left_to_the_sdk(monkeypatch):
-    monkeypatch.delenv("CLICKER_WRITER_BASE_URL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:8081")
+def test_the_anthropic_base_url_is_left_to_the_sdk(clean_env):
+    clean_env.setenv("ANTHROPIC_BASE_URL", "http://localhost:8081")
     assert writer_base_url() is None
-
-
-@pytest.fixture
-def clean_env(monkeypatch):
-    for name in WRITER_ENV:
-        monkeypatch.delenv(name, raising=False)
-    return monkeypatch
-
-
-@pytest.fixture
-def endpoint():
-    """An Anthropic-compatible server on localhost that records each request and answers `reply`."""
-    seen: list[dict] = []
-    state = {"reply": '{"ok": true, "url": "https://example.com", "reason": ""}'}
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            seen.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
-            out = json.dumps(
-                {
-                    "id": "msg_1",
-                    "type": "message",
-                    "role": "assistant",
-                    "model": body["model"],
-                    "content": [{"type": "text", "text": state["reply"]}],
-                    "stop_reason": "end_turn",
-                    "stop_sequence": None,
-                    "usage": {"input_tokens": 1, "output_tokens": 1},
-                }
-            ).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(out)))
-            self.end_headers()
-            self.wfile.write(out)
-
-        def log_message(self, format, *args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield SimpleNamespace(url=f"http://127.0.0.1:{server.server_port}", seen=seen, state=state)
-    server.shutdown()
 
 
 def test_an_endpoint_of_its_own_needs_no_key(clean_env, endpoint):
@@ -176,7 +118,7 @@ def test_anthropic_itself_gets_the_schema_only_through_output_config(clean_env, 
 def test_the_startup_line_leaves_credentials_out_of_the_url(clean_env):
     clean_env.setenv("CLICKER_WRITER_BASE_URL", "https://user:secret@proxy.example.com/v1/messages")
     line = provider(make_writer())
-    assert line.startswith("https://proxy.example.com  models:")
+    assert line.startswith("https://proxy.example.com (anthropic API)  models:")
     assert "secret" not in line
 
 
@@ -193,7 +135,7 @@ def test_the_writer_reply_is_read_whether_or_not_it_came_plain(reply, expected):
 
 
 def test_a_reply_without_any_json_says_so():
-    with pytest.raises(ValueError, match="without usable JSON"):
+    with pytest.raises(WriterError, match="without usable JSON"):
         parse_json("I am not able to help with that.")
 
 

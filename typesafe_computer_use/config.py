@@ -17,6 +17,7 @@ DEFAULT_WRITER_MODEL = "claude-haiku-4-5"
 DEFAULT_ANSWER_MODEL = "claude-sonnet-5"  # runs only when the classifier stops, on a screenshot: worth a stronger reader
 DEFAULT_BROWSER = "Google Chrome"
 ANTHROPIC_HOST = "api.anthropic.com"
+WRITER_APIS = ("anthropic", "openai")
 
 # Sites the classifier can pick by name. Anything else goes through the writer.
 SITES: dict[str, str] = {
@@ -51,10 +52,19 @@ def writer_model() -> str:
     return os.environ.get("CLICKER_WRITER_MODEL", DEFAULT_WRITER_MODEL)
 
 
-def writer_base_url() -> str | None:
-    """The Anthropic-compatible endpoint in CLICKER_WRITER_BASE_URL, or None to leave it to the SDK.
+def writer_api() -> str:
+    """The API the writer's endpoint speaks: `anthropic` (Messages) or `openai` (Chat Completions)."""
+    api = os.environ.get("CLICKER_WRITER_API", "").strip().lower() or "anthropic"
+    if api not in WRITER_APIS:
+        raise ValueError(f"CLICKER_WRITER_API must be one of {', '.join(WRITER_APIS)}, not {api!r}")
+    return api
 
-    Either the host root or the full .../v1/messages URL works; the SDK appends the path itself.
+
+def writer_base_url() -> str | None:
+    """The endpoint in CLICKER_WRITER_BASE_URL, or None to leave it to the Anthropic SDK.
+
+    The SDK appends the rest of the path, so the full request URL works too: `.../v1/messages`
+    comes off for the Anthropic API, `.../chat/completions` for the OpenAI one, which keeps its `/v1`.
     ANTHROPIC_BASE_URL is not read here: the SDK reads it together with the Anthropic credentials,
     so a key and the endpoint it was meant for always travel as a pair.
     """
@@ -62,7 +72,8 @@ def writer_base_url() -> str | None:
     if not raw:
         return None
     base = raw.strip().rstrip("/")
-    for suffix in ("/v1/messages", "/messages", "/v1"):
+    suffixes = ("/chat/completions",) if writer_api() == "openai" else ("/v1/messages", "/messages", "/v1")
+    for suffix in suffixes:
         if base.endswith(suffix):
             base = base[: -len(suffix)]
             break
@@ -71,8 +82,18 @@ def writer_base_url() -> str | None:
 
 def custom_writer_endpoint() -> bool:
     """Whether the writer talks to anything but Anthropic's own API, by either variable."""
+    if writer_api() == "openai":
+        return True
     url = writer_base_url() or os.environ.get("ANTHROPIC_BASE_URL")
     return bool(url) and urlparse(url).hostname != ANTHROPIC_HOST
+
+
+def writer_vision() -> bool:
+    """Whether the answer model gets the screenshot. Off for a model that reads text only."""
+    raw = os.environ.get("CLICKER_WRITER_VISION", "").strip().lower() or "true"
+    if raw not in ("true", "false", "1", "0", "yes", "no"):
+        raise ValueError(f"CLICKER_WRITER_VISION must be true or false, not {raw!r}")
+    return raw in ("true", "1", "yes")
 
 
 def answer_model() -> str:

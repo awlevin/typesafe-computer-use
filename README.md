@@ -12,9 +12,9 @@
 </p>
 
 **typesafe-computer-use** drives a Mac toward a goal you type in plain English, for about a
-fiftieth of a cent per step. It never sends a screenshot to a big model. Instead it
-reads the screen deterministically, asks a small classifier which action comes next,
-and only calls a writing model when a text field genuinely needs free text.
+fiftieth of a cent per step. It reads the screen deterministically, asks a small classifier
+which action comes next, and only calls a writing model when a text field genuinely needs
+free text or the classifier has stopped and the screen needs reading.
 
 ```
 clicker "go to techcrunch and take me to the checkout page for the cheapest tickets to their next upcoming event" --act
@@ -65,25 +65,41 @@ cp .env.example .env     # fill in the keys
 | `CLICKER_BROWSER` | no | defaults to `Google Chrome` |
 | `CLICKER_WRITER_BASE_URL` | no | send the writer to another endpoint; unset means `api.anthropic.com` |
 | `CLICKER_WRITER_API_KEY` | no | the key for `CLICKER_WRITER_BASE_URL`, if it checks one |
+| `CLICKER_WRITER_API` | no | what that endpoint speaks: `anthropic` (the default) or `openai` |
 | `CLICKER_WRITER_MODEL` | no | defaults to `claude-haiku-4-5` |
 | `CLICKER_ANSWER_MODEL` | no | reads the screen whenever the classifier stops; defaults to `claude-sonnet-5` |
+| `CLICKER_WRITER_VISION` | no | `false` for an answer model that reads text only; defaults to `true` |
 
-The writer speaks the Anthropic Messages API, so any endpoint that answers it works too: LM
-Studio, a LiteLLM proxy, a GPU box. Point `CLICKER_WRITER_BASE_URL` at it and name the models it
-serves. The host root or the full `.../v1/messages` URL both work. Such an endpoint may ignore
-structured-output parameters, so the schema is also spelled out in the prompt, and code fences or
-a sentence around the JSON are tolerated. Thinking is turned off there, since a model that thinks by
-default spends the writer's small token budgets on it and returns no text. The answer model reads
-a screenshot, so give it a model that takes images.
+**Other models.** Point `CLICKER_WRITER_BASE_URL` at any endpoint that speaks the Anthropic
+Messages API or, with `CLICKER_WRITER_API=openai`, OpenAI's Chat Completions API: LM Studio,
+Ollama, vLLM, a LiteLLM proxy, DeepSeek. Name the models it serves. The full request URL works as
+well as the root; for the OpenAI API keep the `/v1`. Such an endpoint may ignore structured-output
+parameters, so the schema is also spelled out in the prompt, and code fences or a sentence around
+the JSON are tolerated. On the OpenAI API a `json_schema` response format is asked for first, then
+`json_object`, then none, stepping down only when the endpoint refuses one. Thinking is turned off,
+since a model that thinks by default spends the writer's small token budgets on it and returns no
+text. The answer model reads a screenshot; for a model that reads text only, set
+`CLICKER_WRITER_VISION=false` and it gets the screen's text alone. A reply that cannot be read
+refuses the step it was for, and the run goes on.
 
-Keys never cross over: `CLICKER_WRITER_API_KEY` goes only to `CLICKER_WRITER_BASE_URL` (in both
-the `x-api-key` and `Authorization` headers, since proxies differ), and `ANTHROPIC_API_KEY` never
-goes there. Leave `CLICKER_WRITER_API_KEY` empty for an endpoint that checks no key.
+Keys never cross over: `CLICKER_WRITER_API_KEY` goes only to `CLICKER_WRITER_BASE_URL`, and
+`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` never go there. On the Anthropic API it is sent in both
+the `x-api-key` and `Authorization` headers, since proxies differ. Leave it empty for an endpoint
+that checks no key.
 
 ```
+# LM Studio, either of its two APIs
 CLICKER_WRITER_BASE_URL=http://localhost:1234
 CLICKER_WRITER_MODEL=qwen3.8-flash-next
 CLICKER_ANSWER_MODEL=qwen3.8-flash-next
+
+# any OpenAI-compatible server
+CLICKER_WRITER_API=openai
+CLICKER_WRITER_BASE_URL=https://api.deepseek.com/v1
+CLICKER_WRITER_API_KEY=sk-...
+CLICKER_WRITER_MODEL=deepseek-v4.1-flash
+CLICKER_ANSWER_MODEL=deepseek-v4.1-flash
+CLICKER_WRITER_VISION=false
 ```
 
 Grant your terminal **Screen Recording** and **Accessibility** in System Settings >
@@ -344,6 +360,7 @@ typesafe_computer_use/
   decide.py       state, criteria, the three-Choice request, the Noul check
   writer.py       the writer model, structured replies, URL validation, the answer
                   with its focus or question
+  openai_writer.py the writer's requests on an OpenAI-compatible endpoint
   actions.py      one handler per action, each returning a history line
   runner.py       the step loop, run folder, stop rules, the hand-off to the writer
                   and back
