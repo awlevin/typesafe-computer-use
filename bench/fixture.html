@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Acme Internal Portal — Dashboard</title>
+<style>
+  body { font: 14px/1.45 -apple-system, system-ui, sans-serif; margin: 0; color: #111; }
+  header { padding: 14px 20px; background: #111; color: #fff; display: flex; gap: 18px; align-items: center; }
+  header a { color: #fff; text-decoration: none; }
+  main { padding: 20px; max-width: 900px; }
+  nav.crumbs a { margin-right: 12px; color: #0645ad; }
+  form { margin: 18px 0; display: flex; gap: 8px; }
+  input#q { width: 320px; padding: 7px 9px; font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 14px; }
+  th, td { border: 1px solid #ccc; padding: 6px 9px; text-align: left; }
+  #results { margin-top: 16px; padding: 12px; background: #eef6ff; display: none; }
+  #results a { display: block; margin: 4px 0; }
+  footer { padding: 18px 20px; background: #f2f2f2; margin-top: 30px; }
+  footer a { margin-right: 14px; color: #0645ad; }
+  .spacer { height: 900px; }
+</style>
+</head>
+<body>
+<header>
+  <a href="#home">Acme</a>
+  <a href="#products">Products</a>
+  <a href="#pricing">Pricing</a>
+  <a href="#docs">Docs</a>
+  <a href="#support">Support</a>
+  <a href="#status">Status</a>
+  <a href="#signin">Sign in</a>
+</header>
+
+<main>
+  <nav class="crumbs">
+    <a href="#dashboard">Dashboard</a>
+    <a href="#billing">Billing</a>
+    <a href="#reports">Reports</a>
+  </nav>
+
+  <h1>Billing dashboard</h1>
+
+  <form id="searchform">
+    <input id="q" name="q" type="search" placeholder="Search invoices, customers, PO numbers">
+    <button id="go" type="submit">Search</button>
+  </form>
+
+  <div id="results"><strong id="reslabel"></strong><div id="reslinks"></div></div>
+
+  <h2>Recent invoices</h2>
+  <table>
+    <thead><tr><th>Invoice</th><th>Customer</th><th>Amount</th><th>Status</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <h2>Reports</h2>
+  <nav class="crumbs">
+    <a href="#q1">Quarterly Report Q1</a>
+    <a href="#q2">Quarterly Report Q2</a>
+    <a href="#q3">Quarterly Report Q3</a>
+    <a href="#q4">Quarterly Report Q4</a>
+  </nav>
+  <button id="more" type="button">Load more invoices</button>
+
+  <div class="spacer"></div>
+  <h2>Archive</h2>
+  <nav class="crumbs">
+    <a href="#archive-2025">Archive 2025</a>
+    <a href="#archive-2024">Archive 2024</a>
+    <a href="#archive-2023">Archive 2023</a>
+  </nav>
+</main>
+
+<footer>
+  <a href="#privacy">Privacy</a>
+  <a href="#terms">Terms</a>
+  <a href="#security">Security</a>
+  <a href="#contact">Contact</a>
+  <a href="#careers">Careers</a>
+  <a href="#api">API</a>
+</footer>
+
+<script>
+  const rows = document.getElementById('rows');
+  let rowCount = 0;
+  function addRows(n) {
+    for (let i = 0; i < n; i++) {
+      rowCount++;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>INV-${10000 + rowCount}</td><td>Customer ${rowCount}</td>` +
+                     `<td>$${(100 + rowCount * 7).toFixed(2)}</td>` +
+                     `<td>${rowCount % 3 === 0 ? 'Overdue' : 'Paid'}</td>` +
+                     `<td><a href="#inv-${rowCount}">View</a></td>`;
+      rows.appendChild(tr);
+    }
+  }
+  addRows(20);
+
+  document.getElementById('more').addEventListener('click', () => addRows(15));
+
+  document.getElementById('searchform').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const q = document.getElementById('q').value;
+    document.getElementById('reslabel').textContent = 'Results for: ' + q;
+    const links = document.getElementById('reslinks');
+    links.innerHTML = '';
+    ['Automation', 'Invoicing', 'Reconciliation', 'Payments', 'Exports'].forEach((topic) => {
+      const a = document.createElement('a');
+      a.href = '#result-' + topic.toLowerCase();
+      a.textContent = q + ' — ' + topic + ' guide';
+      links.appendChild(a);
+    });
+    document.getElementById('results').style.display = 'block';
+  });
+</script>
+</body>
+</html>
