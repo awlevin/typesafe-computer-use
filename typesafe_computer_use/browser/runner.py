@@ -22,10 +22,10 @@ from pathlib import Path
 
 from typesafe_sdk import TypeSafeClient
 
-from ..writer import compose_browser_text
+from ..writer import Writer, compose_browser_text, compose_url, looks_credential
 from . import act
 from .decide import Decision, available_actions, decide, field_context, verify_typed
-from .perceive import Page, perceive
+from .perceive import Element, Page, perceive
 from .report import RunFolder, render_payload
 
 
@@ -85,57 +85,56 @@ class RunResult:
         }
 
 
-def extract_text(goal: str, fallback: str = "") -> str:
-    """Deterministic free-text extraction: quoted string, or after search/type.
+def typing_target(page: Page, chosen: int | None) -> tuple[Element | None, str]:
+    """The field to type into, or None and why not.
 
-    Stands in for the writer model so a benchmark step measures the decision loop
-    and not a second model call. The writer is still the right answer in
-    production; `--writer` in the original covers it.
-
-    The capture stops at a clause boundary, because "type hello world into the
-    field" must yield "hello world" and not the instructions around it.
+    The field the classifier named, when it named one; otherwise the first field on
+    the page. A credential field is refused whichever way it was reached: the
+    classifier naming it does not make it safe, and falling back to another field
+    would put the text somewhere the classifier did not choose.
     """
-    import re
-
-    boundaries = r"(?:,|\.|;| and\b| then\b| into\b| in the\b| in a\b| on the\b| to the\b| from the\b|\n)"
-    for pattern in (
-        r"[\"']([^\"']{1,80})[\"']",
-        rf"(?:search|look)\s+(?:for|up)\s+(.{{1,80}}?)(?:{boundaries}|$)",
-        rf"type\s+(?:in\s+)?(.{{1,80}}?)(?:{boundaries}|$)",
-    ):
-        m = re.search(pattern, goal, flags=re.IGNORECASE)
-        if m:
-            text = m.group(1).strip().strip("\"'").strip()
-            if text:
-                return text
-    return fallback
+    named = next((e for e in page.items if e.index == chosen and e.field), None)
+    target = named or next((e for e in page.items if e.field and not e.secret), None)
+    if target is None:
+        return None, "no field"
+    if target.secret or looks_credential(target.label()):
+        return None, "refused_credential"
+    return target, ""
 
 
-def resolve_text(writer, goal: str, page: Page, target, history: list[str]) -> tuple[str, str]:
-    """Free text for a field. The writer composes it; a regex is only a fallback.
+def resolve_text(writer: Writer | None, goal: str, page: Page, target: Element, history: list[str]) -> tuple[str, str]:
+    """Free text for a field, and where it came from. Only the writer composes it.
 
-    Returns (text, provenance). Provenance is recorded per step so a reviewer can
-    see whether a step typed writer-composed text or a deterministic extraction -
-    the distinction the CONTRIBUTING rules care about.
+    The provenance is recorded per step, so a run folder shows whether the writer
+    filled the field, declined, or failed.
     """
-    if writer is not None and target is not None:
-        nearby = field_context(page, int(target.index))
-        try:
-            composed = compose_browser_text(
-                writer,
-                goal,
-                field_label=target.label(),
-                page_title=page.title,
-                url=page.url,
-                nearby_text=nearby,
-                history=history,
-            )
-        except Exception as exc:
-            return "", f"writer_error({type(exc).__name__})"
-        if composed:
-            return composed, "writer"
-        return "", "writer_declined"
-    return extract_text(goal), ("regex_fallback" if extract_text(goal) else "")
+    if writer is None:
+        return "", "no_writer"
+    try:
+        composed = compose_browser_text(
+            writer,
+            goal,
+            field_label=target.label(),
+            page_title=page.title,
+            url=page.url,
+            nearby_text=field_context(page, int(target.index)),
+            history=history,
+        )
+    except Exception as exc:
+        return "", f"writer_error({type(exc).__name__})"
+    return (composed, "writer") if composed else ("", "writer_declined")
+
+
+def resolve_url(writer: Writer | None, goal: str, history: list[str]) -> tuple[str, str]:
+    """The address to open for this goal, and where it came from. Only the writer proposes one,
+    and `compose_url` returns only a valid https URL."""
+    if writer is None:
+        return "", "no_writer"
+    try:
+        url = compose_url(writer, goal, history)
+    except Exception as exc:
+        return "", f"writer_error({type(exc).__name__})"
+    return (url, "writer") if url else ("", "writer_declined")
 
 
 def run_goal(
@@ -150,7 +149,7 @@ def run_goal(
     change_timeout_ms: int = 300,
     verbose: bool = True,
     model: str | None = None,
-    writer=None,
+    writer: Writer | None = None,
     runfolder: RunFolder | None = None,
 ) -> RunResult:
     result = RunResult(goal=goal, url=str(session.evaluate("location.href") or ""), outcome="incomplete")
@@ -175,13 +174,9 @@ def run_goal(
             page, perceive_ms = pending, 0.0
             pending = None
 
-        regex_text = extract_text(goal)
-        # Whether typing is even worth offering. With a writer available the text
-        # can always be composed, so a field is enough. Without one we can only
-        # offer typing when the goal actually contains something to type —
-        # otherwise the classifier picks an action the loop cannot execute.
-        text_available = page.has_field and (writer is not None or bool(regex_text))
-        action_criteria = available_actions(page, allow_type=allow_type, text_available=text_available)
+        # Typing and opening an address need free text, which only the writer composes.
+        can_write = writer is not None
+        action_criteria = available_actions(page, allow_type=allow_type, can_write=can_write)
         element_criteria_map = {str(e.index): e.label() for e in page.items}
 
         t0 = time.perf_counter()
@@ -191,8 +186,7 @@ def run_goal(
             page,
             history,
             allow_type=allow_type,
-            text=regex_text,
-            text_available=text_available,
+            can_write=can_write,
             model=model,
         )
         decide_ms = (time.perf_counter() - t0) * 1000
@@ -212,7 +206,7 @@ def run_goal(
             runfolder.step_history(n, history)
             runfolder.step_state(n, decision.state)
             runfolder.step_answers(n, decision.answers)
-            runfolder.step_elements(n, page)
+            runfolder.step_elements(n, page, can_write=can_write)
 
         fp_before = act.fingerprint(page)
         kind = decision.kind.choice
@@ -231,17 +225,13 @@ def run_goal(
             else:
                 detail = act.click(session, int(element.index), element, page)
         elif kind == "type_text":
-            idx = decision.chosen_element if decision.element else None
-            target = next((e for e in page.items if e.index == idx), None)
-            if target is None:
-                fields = [e for e in page.items if e.tag in {"input", "textarea"}]
-                target = fields[0] if fields else None
-            # The classifier picked the action; the writer supplies the text.
-            # When there is no writer, resolve_text falls back to a regex and
-            # says so, and the step line records which one was used.
-            text, text_source = resolve_text(writer, goal, page, target, history)
+            # The classifier picked the action and the field; the writer supplies the
+            # text. The field is checked before the writer is asked, so a credential
+            # field is refused whatever the text would have been.
+            target, refusal = typing_target(page, decision.chosen_element)
+            text, text_source = ("", refusal) if target is None else resolve_text(writer, goal, page, target, history)
             if target is None or not text:
-                detail = f"type -> {text_source or 'no field or no text'}"
+                detail = f"type -> {text_source}"
                 noops += 1
                 touched = False
             else:
@@ -265,11 +255,11 @@ def run_goal(
         elif kind == "back":
             detail = act.go_back(session)
         elif kind == "navigate":
-            target_url = extract_text(goal)
-            if target_url.startswith("http"):
-                act.navigate(session, target_url)
+            target_url, text_source = resolve_url(writer, goal, history)
+            if target_url:
+                detail = act.navigate(session, target_url)
             else:
-                detail = "navigate -> no URL available"
+                detail = f"navigate -> {text_source}"
                 noops += 1
                 touched = False
         elif kind == "wait":
@@ -300,6 +290,7 @@ def run_goal(
             decide_ms=decide_ms,
             act_ms=act_ms,
             total_ms=total_ms,
+            text_source=text_source,
         )
         result.steps.append(step)
         if verbose:

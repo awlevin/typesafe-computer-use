@@ -60,10 +60,13 @@ class RunFolder:
     def step_answers(self, n: int, answers: dict[str, Any]) -> None:
         (self.root / f"step-{n:02d}-answers.json").write_text(json.dumps(answers, indent=2, default=str))
 
-    def step_elements(self, n: int, page: Page) -> None:
+    def step_elements(self, n: int, page: Page, *, can_write: bool) -> None:
         (self.root / f"step-{n:02d}-elements.json").write_text(
             json.dumps(
                 {
+                    # Whether a writer was there to compose text, which decides the action set
+                    # offered; replay needs it to offer the same one.
+                    "can_write": can_write,
                     "url": page.url,
                     "title": page.title,
                     "vw": page.vw,
@@ -148,7 +151,8 @@ def page_from_elements(data: dict) -> Page:
             in_view=bool(it.get("in_view", True)),
             covered=bool(it.get("covered", False)),
             href=str(it.get("href", "")),
-            value=str(it.get("value", "")),
+            field=bool(it.get("field", False)),
+            secret=bool(it.get("secret", False)),
         )
         for it in data.get("items", [])
     ]
@@ -162,7 +166,7 @@ def page_from_elements(data: dict) -> Page:
         raw_count=int(data.get("element_count", len(items))),
         can_scroll=bool(data.get("can_scroll", True)),
         history_len=int(data.get("history_len", 1)),
-        field_count=sum(1 for e in items if e.tag in {"input", "textarea"}),
+        field_count=sum(1 for e in items if e.typeable),
         scroll_y=int(data.get("scroll_y", 0)),
         candidates=int(data.get("candidates", len(items))),
         below_fold=int(data.get("below_fold", 0)),
@@ -177,13 +181,15 @@ def load_step(run_dir: str | Path, n: int) -> dict:
     if not elements_path.exists():
         raise FileNotFoundError(f"no {elements_path.name} in {run}")
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    elements = json.loads(elements_path.read_text())
     payload_path = run / f"step-{n:02d}-payload.txt"
     answers_path = run / f"step-{n:02d}-answers.json"
     state_path = run / f"step-{n:02d}-state.json"
     history_path = run / f"step-{n:02d}-history.json"
     return {
         "goal": meta.get("goal", ""),
-        "page": page_from_elements(json.loads(elements_path.read_text())),
+        "page": page_from_elements(elements),
+        "can_write": bool(elements.get("can_write", False)),
         "payload": payload_path.read_text() if payload_path.exists() else "",
         "state": json.loads(state_path.read_text()) if state_path.exists() else {},
         "history": json.loads(history_path.read_text()) if history_path.exists() else [],

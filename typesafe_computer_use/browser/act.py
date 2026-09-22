@@ -87,9 +87,12 @@ def type_text(session: Session, index: int, text: str) -> str:
 
 
 def field_value(session: Session, index: int) -> str | None:
+    """What a field holds after the loop typed into it, for the verify check. A password field
+    is never read: the loop never types into one, and this makes sure of it a second time."""
     value = session.evaluate(
         f"""(() => {{ const el = document.querySelector({_select(index)!r});
-                     return el ? (el.value === undefined ? null : String(el.value)) : null; }})()"""
+                     if (!el || el.value === undefined || String(el.type).toLowerCase() === "password") return null;
+                     return String(el.value); }})()"""
     )
     return None if value is None else str(value)
 

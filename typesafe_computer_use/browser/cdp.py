@@ -74,14 +74,20 @@ class Chrome:
         self._ephemeral = profile is None
         self.proc: subprocess.Popen | None = None
 
+    @property
+    def origin(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
     def start(self, *, window: tuple[int, int] = (1440, 900), timeout: float = 25.0) -> Chrome:
         args = [
             find_chrome(),
+            # The debugging socket listens on the loopback address (Chrome's default;
+            # --remote-debugging-address is never passed), and accepts a websocket from
+            # one origin, which `attach` sends. Chrome 111+ refuses every other origin,
+            # so a web page cannot attach to this browser.
             f"--remote-debugging-port={self.port}",
+            f"--remote-allow-origins={self.origin}",
             f"--user-data-dir={self.profile}",
-            # Chrome 111+ rejects CDP websocket handshakes that carry an Origin
-            # header unless the origin is explicitly allowed.
-            "--remote-allow-origins=*",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-features=Translate,MediaRouter,OptimizationHints",
@@ -120,29 +126,33 @@ class Chrome:
         self.close()
 
     def attach(self, **session_kwargs: Any) -> Session:
-        session = Session(self.page_target(), **session_kwargs)
+        session = Session(self.page_target(), origin=self.origin, **session_kwargs)
         session.call("Page.enable")
         session.call("Runtime.enable")
         return session
 
     def close(self) -> None:
+        """Stop Chrome, and remove the profile when this instance made it."""
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
             try:
                 self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+                self.proc.wait(timeout=5)
         self.proc = None
+        if self._ephemeral:
+            shutil.rmtree(self.profile, ignore_errors=True)
 
 
 class Session:
     """One flat CDP session over websocket. Sync, because the loop is sync."""
 
-    def __init__(self, ws_url: str, *, timeout: float = 30.0, max_size: int | None = 64 * 1024 * 1024):
+    def __init__(self, ws_url: str, *, origin: str | None = None, timeout: float = 30.0, max_size: int | None = 64 * 1024 * 1024):
         self.ws_url = ws_url
         self.timeout = timeout
         self._id = 0
-        self._ws = websocket.create_connection(ws_url, timeout=timeout, max_size=max_size)
+        self._ws = websocket.create_connection(ws_url, timeout=timeout, max_size=max_size, origin=origin)
         self.calls = 0
 
     # -- plumbing ----------------------------------------------------------

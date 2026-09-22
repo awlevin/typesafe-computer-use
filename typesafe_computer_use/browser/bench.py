@@ -19,6 +19,7 @@ import argparse
 import base64
 import io
 import json
+import os
 import statistics
 import sys
 import time
@@ -26,12 +27,14 @@ from pathlib import Path
 
 from typesafe_sdk import TypeSafeClient
 
+from .. import config
+from ..writer import make_writer, provider
 from . import act
 from .cdp import Chrome
 from .decide import decide
 from .perceive import perceive
 from .report import RunFolder
-from .runner import extract_text, run_goal, save
+from .runner import run_goal, save
 
 FIXTURE = Path(__file__).resolve().parents[2] / "bench" / "fixture.html"
 
@@ -85,8 +88,7 @@ def ocr_perception(session, *, budget: int = 120) -> dict:
 
 def benchmark_perception(args: argparse.Namespace) -> int:
     url = FIXTURE.as_uri() if args.fixture else args.url
-    with Chrome(headed=args.headed) as chrome:
-        session = chrome.attach()
+    with Chrome(headed=args.headed) as chrome, chrome.attach() as session:
         act.navigate(session, url)
         act.wait_for_load(session)
 
@@ -165,8 +167,6 @@ def benchmark_perception(args: argparse.Namespace) -> int:
                 "fraction": round(covered / max(1, len(dom_text)), 3),
             }
             print(f"OCR reproduces {covered}/{len(dom_text)} DOM labels verbatim ({out['recall']['fraction'] * 100:.0f}%)")
-
-        session.close()
     print("\n" + json.dumps(out, indent=2, default=str))
     return 0
 
@@ -175,21 +175,21 @@ def benchmark_loop(args: argparse.Namespace) -> int:
     url = FIXTURE.as_uri() if args.fixture else args.url
     goal = args.goal or TASK
 
-    writer = None
-    if args.writer:
-        from ..writer import make_writer
-
+    _require_key()
+    try:
         writer = make_writer()
-        if writer is None:
-            print("no Anthropic credentials — free text falls back to the regex extractor", file=sys.stderr)
+    except ValueError as e:
+        sys.exit(str(e))
+    if writer is None:
+        print("writer disabled: no ANTHROPIC_API_KEY or CLICKER_WRITER_BASE_URL; type_text and navigate need one")
+    else:
+        print(f"writer: {provider(writer)}")
 
     runfolder = RunFolder.create(args.runs) if args.runs else None
     if runfolder is not None:
         print(f"run folder: {runfolder.root}")
 
-    with Chrome(headed=args.headed) as chrome:
-        session = chrome.attach()
-        client = TypeSafeClient()
+    with Chrome(headed=args.headed) as chrome, chrome.attach() as session, TypeSafeClient() as client:
         print(f"goal: {goal}\nurl:  {url}\n")
         print(f"{'#':>3}  {'action':<12} {'detail':<40} {'conf':<9} {'perceive':>8}  {'decide':>8}  {'act':>8}  {'total':>9}")
         print("-" * 118)
@@ -204,7 +204,6 @@ def benchmark_loop(args: argparse.Namespace) -> int:
             writer=writer,
             runfolder=runfolder,
         )
-        session.close()
 
     s = result.summary()
     print("-" * 118)
@@ -233,6 +232,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
     """
     from .report import load_step, render_answers
 
+    _require_key()
     step = load_step(args.run, args.step)
     page = step["page"]
     print(f"run:  {args.run}")
@@ -242,16 +242,14 @@ def cmd_replay(args: argparse.Namespace) -> int:
     print(f"      history: {len(step['history'])} prior action(s)\n")
 
     with TypeSafeClient() as client:
-        # History is part of the state that was sent, so it has to come back
-        # too or the reconstruction will not match.
-        # Mirror the runner exactly: history and the goal-derived text are both
-        # part of the state that was sent, so both have to be restored.
+        # Mirror the runner exactly: the history is part of the state that was sent, and
+        # whether a writer was there decides the action set offered.
         decision = decide(
             client,
             step["goal"],
             page,
             history=step["history"],
-            text=extract_text(step["goal"]),
+            can_write=step["can_write"],
             model=args.model,
         )
 
@@ -270,25 +268,13 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
-def _ensure_key() -> None:
-    """The SDK reads TYPESAFE_API_KEY. Fall back to the macOS Keychain so this
-    repo runs on a machine that stores the key properly instead of in a dotfile."""
-    import os
-    import subprocess
+DOTENV = Path.cwd() / ".env"
 
-    if os.environ.get("TYPESAFE_API_KEY"):
-        return
-    try:
-        out = subprocess.run(
-            ["security", "find-generic-password", "-s", "openclaw/typesafe-ai/api-key", "-a", "typesafe", "-w"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            os.environ["TYPESAFE_API_KEY"] = out.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
+
+def _require_key() -> None:
+    """The TypeSafe key, resolved the way `clicker` resolves it: the environment, then ./.env."""
+    if not os.environ.get("TYPESAFE_API_KEY"):
+        sys.exit("TYPESAFE_API_KEY is not set (export it or put it in .env)")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -303,8 +289,8 @@ def main(argv: list[str] | None = None) -> int:
             "examples:\n"
             "  clicker-bench perception --url https://news.ycombinator.com\n"
             "  clicker-bench perception --fixture --n 8\n"
-            "  clicker-bench loop --fixture --runs bench/example-run\n"
-            "  clicker-bench replay --run bench/example-run/<ts> --step 2"
+            "  clicker-bench loop --fixture --runs runs\n"
+            "  clicker-bench replay --run runs/<ts> --step 2"
         ),
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -328,7 +314,6 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--model", default=None)
     q.add_argument("--headed", action="store_true")
     q.add_argument("--out", default=None)
-    q.add_argument("--writer", action="store_true", help="compose typed text with the writer model")
     q.add_argument("--runs", default=None, help="write a replayable run folder under this directory")
     q.set_defaults(func=benchmark_loop)
 
@@ -339,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     r.set_defaults(func=cmd_replay)
 
     args = ap.parse_args(argv)
-    _ensure_key()
+    config.load_dotenv(DOTENV)
     return int(args.func(args))
 
 

@@ -22,9 +22,9 @@ def make_page(**kwargs) -> Page:
     items = kwargs.pop(
         "items",
         [
-            Element(0, "input", "search", "Search invoices", 10, 10, 200, 30, True, False, "", ""),
-            Element(1, "button", "submit", "Search", 220, 10, 80, 30, True, False, "", ""),
-            Element(2, "a", "", "Quarterly Report Q4", 10, 60, 200, 20, True, False, "", ""),
+            Element(0, "input", "search", "Search invoices", 10, 10, 200, 30, True, False, "", field=True),
+            Element(1, "button", "submit", "Search", 220, 10, 80, 30, True, False, ""),
+            Element(2, "a", "", "Quarterly Report Q4", 10, 60, 200, 20, True, False, ""),
         ],
     )
     base = dict(
@@ -102,7 +102,7 @@ def test_run_folder_writes_every_artefact(tmp_path: Path):
     folder.step_history(1, ["type_text: 'x'"])
     folder.step_state(1, {"goal": "g", "text_to_type": "x"})
     folder.step_answers(1, {"kind": {"type": "choice", "choice": "click", "probabilities": {}, "confidence": 0.5}})
-    folder.step_elements(1, page)
+    folder.step_elements(1, page, can_write=True)
     folder.step_payload(
         1, render_payload(goal="g", page=page, history=[], state={"goal": "g"}, actions={"click": "c"}, elements={"0": "e"})
     )
@@ -125,21 +125,23 @@ def test_load_step_round_trips_a_step(tmp_path: Path):
     folder = RunFolder.create(tmp_path)
     page = make_page()
     folder.step_history(1, ["click: [1] 'Search'"])
-    folder.step_state(1, {"goal": "g", "previous_actions": ["click: [1] 'Search'"], "text_to_type": "inv"})
+    folder.step_state(1, {"goal": "g", "previous_actions": ["click: [1] 'Search'"]})
     folder.step_answers(1, {"kind": {"type": "choice", "choice": "click", "probabilities": {"click": 1.0}, "confidence": 0.9}})
-    folder.step_elements(1, page)
+    folder.step_elements(1, page, can_write=True)
     folder.finish({"goal": "find the invoice", "outcome": "done"})
 
     step = load_step(folder.root, 1)
     assert step["goal"] == "find the invoice"
     assert step["history"] == ["click: [1] 'Search'"]
-    assert step["state"]["text_to_type"] == "inv"
+    assert step["state"]["previous_actions"] == ["click: [1] 'Search'"]
+    assert step["can_write"] is True
     assert step["answers"]["kind"]["choice"] == "click"
 
     rebuilt = step["page"]
     assert rebuilt.url == page.url and rebuilt.title == page.title
     assert [(e.index, e.name, e.x, e.y, e.tag) for e in rebuilt.items] == [(e.index, e.name, e.x, e.y, e.tag) for e in page.items]
-    assert rebuilt.field_count == 1  # derived from tags, not stored
+    assert rebuilt.field_count == 1  # derived from the items, not stored
+    assert rebuilt.items == page.items
     assert rebuilt.can_scroll and rebuilt.scroll_y == 0
 
 
@@ -266,12 +268,7 @@ def test_resolve_text_survives_a_writer_failure():
     assert text == "" and source == "writer_error(RuntimeError)"
 
 
-def test_resolve_text_falls_back_to_the_regex_and_says_so():
-    """Provenance is recorded so a reviewer can see a step did not use the writer."""
+def test_resolve_text_without_a_writer_types_nothing():
+    """Free text only comes from the writer: there is no fallback that reads it out of the goal."""
     text, source = resolve_text(None, "search for 'invoice automation'", make_page(), make_page().items[0], [])
-    assert text == "invoice automation" and source == "regex_fallback"
-
-
-def test_resolve_text_with_neither_writer_nor_text_is_empty():
-    text, source = resolve_text(None, "open the Merlion article", make_page(), make_page().items[0], [])
-    assert text == "" and source == ""
+    assert text == "" and source == "no_writer"

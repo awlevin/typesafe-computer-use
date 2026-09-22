@@ -25,10 +25,12 @@ BROWSER_ACTIONS: dict[str, str] = {
         "open a menu, or select a tab. Choose the element in the element question."
     ),
     "type_text": (
-        "Type free text into the focused or specified text field — a search box, a form input, "
-        "a username. Only valid when a text field needs content."
+        "Type free text into a text field — a search box, a form input, a username. Name the field "
+        "in the element question. Only valid when a text field needs content."
     ),
-    "navigate": "Load a specific URL in this tab. Not for clicking an on-screen link: use click for that.",
+    "navigate": (
+        "Open the website the goal is about in this tab, by address. Not for clicking an on-screen link: use click for that."
+    ),
     "press_enter": "Press Return to submit the form or field that currently has focus.",
     "press_escape": "Press Escape to dismiss a dialog, popup, or dropdown.",
     "scroll_down": "Scroll down to reveal content below the fold.",
@@ -79,25 +81,28 @@ def element_criteria(page: Page) -> dict[str, str]:
     return {str(it.index): it.label() for it in page.items}
 
 
-def available_actions(page: Page, *, allow_type: bool = True, text_available: bool = True) -> dict[str, str]:
+def available_actions(page: Page, *, allow_type: bool = True, can_write: bool = False) -> dict[str, str]:
     """Only offer actions the page can actually carry out.
 
     This is the one place the browser backend can beat the original's design:
     a screen has fixed affordances, so a text field either exists or it does not.
     Offering `type_text` on a page with no input guarantees a stall, and a
     stalled step reads as model doubt even though the model was never at fault.
+
+    Typed text and a URL to open are free text, and free text only comes from the
+    writer. With no writer (`can_write` false) neither action is offered.
     """
     actions: dict[str, str] = {}
     if page.items:
         actions["click"] = BROWSER_ACTIONS["click"]
-    # Offer typing only when there is both a field and something to type. An
-    # action the caller cannot execute is a guaranteed stall, and the model will
+    # An action the caller cannot execute is a guaranteed stall, and the model will
     # pick it at low confidence, which then reads as doubt.
-    if allow_type and page.has_field and text_available:
+    if allow_type and page.has_field and can_write:
         actions["type_text"] = BROWSER_ACTIONS["type_text"]
     if page.has_field:
         actions["press_enter"] = BROWSER_ACTIONS["press_enter"]
-    actions["navigate"] = BROWSER_ACTIONS["navigate"]
+    if can_write:
+        actions["navigate"] = BROWSER_ACTIONS["navigate"]
     actions["press_escape"] = BROWSER_ACTIONS["press_escape"]
     if page.can_scroll:
         actions["scroll_down"] = BROWSER_ACTIONS["scroll_down"]
@@ -116,12 +121,10 @@ def base_state(
     history: list[str],
     *,
     url_catalog: dict[str, str] | None,
-    text: str | None = None,
 ) -> dict:
     return {
         "goal": goal,
         "page": {"url": page.url, "title": page.title, "viewport": f"{page.vw}x{page.vh}"},
-        "text_to_type": text or None,
         "previous_actions": history[-8:],
         "elements": [
             {
@@ -131,6 +134,7 @@ def base_state(
                 "href": it.href[:120] or None,
                 "visible": it.in_view,
                 "covered": it.covered,
+                "credential_field": it.secret or None,
             }
             for it in page.items
         ],
@@ -146,13 +150,10 @@ def decide(
     *,
     url_catalog: dict[str, str] | None = None,
     allow_type: bool = True,
-    text: str | None = None,
-    text_available: bool | None = None,
+    can_write: bool = False,
     model: str | None = None,
 ) -> Decision:
-    if text_available is None:
-        text_available = bool(text)
-    actions = available_actions(page, allow_type=allow_type, text_available=text_available)
+    actions = available_actions(page, allow_type=allow_type, can_write=can_write)
 
     questions: dict[str, Any] = {
         "kind": Choice(
@@ -171,13 +172,13 @@ def decide(
     if page.items:
         questions["element"] = Choice(
             instructions=(
-                "If the right next move is to click an element, which element? "
+                "If the right next move is to click an element or type into a field, which element? "
                 "Prefer an element that is on screen and not covered by an overlay."
             ),
             criteria=element_criteria(page),
         )
 
-    state = base_state(goal, page, history, url_catalog=url_catalog, text=text)
+    state = base_state(goal, page, history, url_catalog=url_catalog)
     response = client.system_one(state=state, questions=questions, model=model)
     answers = response.answers
 
@@ -186,7 +187,7 @@ def decide(
     return Decision(
         kind=answers["kind"],
         element=element if isinstance(element, ChoiceAnswer) else None,
-        satisfied=satisfied if isinstance(satisfied, NoulAnswer) else NoulAnswer("satisfied", 0.0),
+        satisfied=satisfied if isinstance(satisfied, NoulAnswer) else NoulAnswer(noul=0.0),
         state=state,
         questions=dict(questions),
         answers=serialize_answers(response.answers),
@@ -222,11 +223,6 @@ def field_context(page: Page, index: int, *, span: int = 6) -> list[str]:
     lo = max(0, target - span)
     hi = min(len(page.items), target + span + 1)
     return [e.name for e in page.items[lo:hi] if e.index != index]
-
-
-def writer_questions(page: Page, text: str | None = None, allow_type: bool = True) -> dict[str, str]:
-    """The action set for this page, for payload dumps."""
-    return available_actions(page, allow_type=allow_type, text_available=bool(text))
 
 
 def serialize_answers(answers: dict) -> dict[str, dict]:

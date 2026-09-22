@@ -6,12 +6,9 @@ set filtering, change detection and the step loop are all testable in CI.
 
 from __future__ import annotations
 
-import pytest
-
 from typesafe_computer_use.browser import act
 from typesafe_computer_use.browser.decide import available_actions
 from typesafe_computer_use.browser.perceive import INTERACTIVE_JS, Element, perceive
-from typesafe_computer_use.browser.runner import extract_text
 
 
 def page_dict(*, items=(), scroll_y=0, can_scroll=True, history_len=1, fields=0):
@@ -45,7 +42,6 @@ def element_dict(index=0, name="Sign in", tag="a", **kwargs):
         "in_view": True,
         "covered": False,
         "href": "",
-        "value": "",
     }
     base.update(kwargs)
     return base
@@ -86,13 +82,13 @@ def test_perceive_honours_budget():
 
 
 def test_element_label_carries_the_context_that_matters():
-    e = Element(0, "a", "", "Docs", 5, 5, 40, 20, True, True, "https://x.test/docs", "")
+    e = Element(0, "a", "", "Docs", 5, 5, 40, 20, True, True, "https://x.test/docs")
     label = e.label()
     assert "<a>" in label and "'Docs'" in label
     assert "x.test/docs" in label
     assert "covered by an overlay" in label
 
-    off = Element(1, "button", "", "More", 5, 900, 40, 20, False, False, "", "")
+    off = Element(1, "button", "", "More", 5, 900, 40, 20, False, False, "")
     assert "off-screen" in off.label()
 
 
@@ -103,17 +99,20 @@ def test_perceive_handles_active_element_absent():
 # ------------------------------------------------------- action availability
 def test_type_text_not_offered_without_a_field():
     page = perceive(StubSession([page_dict(items=[element_dict()], fields=0)]))
-    actions = available_actions(page, text_available=True)
+    actions = available_actions(page, can_write=True)
     assert "type_text" not in actions
     assert "press_enter" not in actions
     assert "click" in actions
 
 
-def test_type_text_not_offered_without_text_even_with_a_field():
-    """An action the caller cannot execute is a guaranteed stall."""
+def test_free_text_actions_need_a_writer():
+    """Typed text and an address to open only come from the writer, so without one neither
+    action is offered: an action the caller cannot execute is a guaranteed stall."""
     page = perceive(StubSession([page_dict(items=[element_dict()], fields=1)]))
-    assert "type_text" not in available_actions(page, text_available=False)
-    assert "type_text" in available_actions(page, text_available=True)
+    without = available_actions(page, can_write=False)
+    assert "type_text" not in without and "navigate" not in without
+    with_writer = available_actions(page, can_write=True)
+    assert "type_text" in with_writer and "navigate" in with_writer
 
 
 def test_scroll_and_back_are_offered_only_when_they_can_do_something():
@@ -135,7 +134,7 @@ def test_no_click_when_there_is_nothing_to_click():
 def test_action_terminators_always_present():
     empty = perceive(StubSession([page_dict(items=[])]))
     actions = available_actions(empty)
-    for key in ("done", "none", "wait", "navigate"):
+    for key in ("done", "none", "wait"):
         assert key in actions
 
 
@@ -175,25 +174,3 @@ def test_observe_with_no_baseline_just_perceives():
     session = StubSession([page_dict(items=[element_dict()])])
     page, _, changed = act.observe_until_changed(session, None)
     assert changed and page.items
-
-
-# ------------------------------------------------------------- text extraction
-@pytest.mark.parametrize(
-    "goal,expected",
-    [
-        ("Search for 'invoice automation' in the box", "invoice automation"),
-        ("search for quarterly reports and open the first", "quarterly reports"),
-        ("type hello world into the field", "hello world"),
-        ('Click the link labelled "Merlion"', "Merlion"),
-    ],
-)
-def test_extract_text(goal, expected):
-    assert extract_text(goal) == expected
-
-
-def test_extract_text_returns_empty_when_there_is_nothing_to_type():
-    assert extract_text("Open the article about the Merlion from this page") == ""
-
-
-def test_extract_text_respects_fallback():
-    assert extract_text("no quoted text here", fallback="https://x.test") == "https://x.test"
