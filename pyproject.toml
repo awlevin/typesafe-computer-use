@@ -25,6 +25,7 @@ dependencies = [
     "openai==2.54.0",
     "pillow==12.3.0",
     "typesafe-sdk==0.6.0",
+    "websocket-client==1.9.0",
     "ocrmac==1.0.1; sys_platform == 'darwin'",
     "pyobjc-framework-ApplicationServices==12.2.2; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz==12.2.2; sys_platform == 'darwin'",
@@ -41,6 +42,7 @@ Issues = "https://github.com/awlevin/typesafe-computer-use/issues"
 [project.scripts]
 clicker = "typesafe_computer_use.cli:main"
 clicker-inspect = "typesafe_computer_use.cli:inspect"
+clicker-bench = "typesafe_computer_use.browser.bench:main"
 
 [dependency-groups]
 dev = ["pytest==9.1.1", "ruff==0.16.8"]
