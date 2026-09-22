@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from typesafe_sdk import Choice, ChoiceAnswer, Noul, TypeSafeClient
 
-from .config import APPS, SITES
+from .config import SITES
 from .dates import date_hints, now_context
 from .models import AxNode, Field, Guidance, Item, Screen
 
@@ -34,11 +34,6 @@ def fixed_actions(browser: str, email: str | None) -> dict[str, str]:
             "site question says which website, or says that the page already open there is the one to "
             "continue with. This is the only way to reach a website: never click the address bar, a URL, "
             "or a search box to get there. Works from any app, including this one."
-        ),
-        "open_app": (
-            "Bring a desktop app to the front, launching it first if it is not already running. The app "
-            "question says which one. Use this instead of use_browser when the goal needs a native app "
-            "rather than a website."
         ),
         "type_text": (
             "Type free text into the focused text field. A writing model composes the text from the "
@@ -128,11 +123,6 @@ def site_criteria() -> dict[str, str]:
     }
 
 
-def app_criteria() -> dict[str, str]:
-    """Which desktop app open_app opens. Only the known catalog: an app not in it cannot be launched."""
-    return dict(APPS)
-
-
 def base_state(
     goal: str,
     screen: Screen,
@@ -175,7 +165,6 @@ class Decision:
     kind: ChoiceAnswer
     item: ChoiceAnswer | None
     site: ChoiceAnswer
-    app: ChoiceAnswer
     offscreen: ChoiceAnswer | None = None
 
     @property
@@ -199,7 +188,7 @@ class Decision:
         # Only the answers that name a target lower the confidence: a click or a press lands
         # somewhere, and the wrong somewhere is not undone. use_browser reads the site answer too,
         # but every outcome of it is a page the next step can leave, so a split there must not
-        # stop the run. open_app is the same: the wrong app is as easy to leave as the wrong page.
+        # stop the run.
         if self.clicking:
             return min(self.kind.confidence, self.item.confidence)
         if self.pressing_offscreen:
@@ -241,10 +230,6 @@ def decide(
             ),
             criteria=site_criteria(),
         ),
-        "app": Choice(
-            instructions=("If opening a desktop app is the right move, which one?"),
-            criteria=app_criteria(),
-        ),
     }
     if items:
         questions["item"] = Choice(
@@ -265,13 +250,7 @@ def decide(
             criteria=offscreen_criteria(screen.offscreen),
         )
     answers = client.system_one(state=base_state(goal, screen, items, history, tried, guidance), questions=questions).answers
-    return Decision(
-        kind=answers["kind"],
-        item=answers.get("item"),
-        site=answers["site"],
-        app=answers["app"],
-        offscreen=answers.get("offscreen"),
-    )
+    return Decision(kind=answers["kind"], item=answers.get("item"), site=answers["site"], offscreen=answers.get("offscreen"))
 
 
 def verify_typed(client: TypeSafeClient, goal: str, field_before: Field, typed: str, field_after: Field | None) -> float:

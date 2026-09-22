@@ -127,15 +127,6 @@ def activate(app: str, timeout: float = 3.0) -> bool:
     return frontmost_app() == app
 
 
-def open_app(app: str, timeout: float = 20.0) -> bool:
-    """Bring an app to the front, launching it first if it is not already running.
-
-    AppleScript's activate launches an app that is not running, so this is just activate with a
-    longer timeout: a cold launch takes longer than switching to one already open.
-    """
-    return activate(app, timeout)
-
-
 def open_url(browser: str, url: str) -> bool:
     osascript(f'tell application "{browser}" to open location "{url}"')
     return activate(browser)

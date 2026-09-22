@@ -182,27 +182,6 @@ def activate(app: str, timeout: float = 3.0) -> bool:
     return win32gui.GetForegroundWindow() == hwnd
 
 
-def open_app(app: str, timeout: float = 20.0) -> bool:
-    """Bring an app to the front, launching it first if it is not already running.
-
-    Windows has no single call that both launches and waits like AppleScript's activate, so this
-    checks for an already-running window first, then starts the app by its registered name (the
-    same one Start > Run resolves through the App Paths registry key) and waits for it to appear.
-    """
-    if activate(app, timeout=1.0):
-        return True
-    try:
-        os.startfile(app)
-    except OSError:
-        return False
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        if activate(app, timeout=0.5):
-            return True
-        time.sleep(0.5)
-    return False
-
-
 def open_url(browser: str, url: str) -> bool:
     exe = BROWSER_EXES.get(browser.strip().lower())
     if exe and shutil.which(exe):
