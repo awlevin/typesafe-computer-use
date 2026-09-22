@@ -176,7 +176,11 @@ classifier reads, not in more hand-offs.
 
 `macos.py` drives whatever is on screen. For the browser there is a second backend that
 never looks at pixels: it reads the DOM over the Chrome DevTools Protocol, so it needs no
-Screen Recording permission and cannot fight you for the cursor.
+Screen Recording permission and cannot fight you for the cursor. It is opt-in: `clicker`
+never uses it. `clicker-bench` starts its own Chrome on a fresh, temporary profile (never
+yours), whose debugging socket listens on the loopback address and accepts one origin, and
+removes the profile when it closes. It reads `TYPESAFE_API_KEY` and the writer's settings
+the way `clicker` does, from the environment or `./.env`.
 
 ```
 uv run clicker-bench loop --fixture --runs runs         # end-to-end step loop
@@ -214,7 +218,7 @@ Runtime.evaluate ─► ordered element list (text, role, click point, on-screen
 ```
 
 The action set is filtered to what the page can actually do: no `type_text` without a field
-and something to type, no `scroll_down` when the document does not scroll, no `back` with
+and a writer, no `navigate` without a writer, no `scroll_down` when the document does not scroll, no `back` with
 empty history. An option the loop cannot execute is a guaranteed stall, and it reads as
 model doubt when the model was never at fault.
 
@@ -223,11 +227,17 @@ costs no extra round trip.
 
 ### Where browser free text comes from
 
-The same rule as above — `compose_browser_text` with a structured reply — plus a code-side
-credential guard that refuses a credential-shaped field *before* the model is asked. Every
-step records provenance (`writer` / `writer_declined` / `regex_fallback`) in the step line
-and the run folder. The regex fallback exists so the benchmark measures the decision loop
-rather than a second model call; the writer takes over whenever credentials resolve.
+The writer, as above: `compose_browser_text` for a field and `compose_url` for an address,
+each with a structured reply. There is no other source, so with no writer the loop does not
+offer `type_text` or `navigate`. Every step records where its text came from (`writer`,
+`writer_declined`, `writer_error(...)`, `refused_credential`, `no_writer`) in the step line
+and the run folder.
+
+Perception never reads what is in a field: an input's value is not collected, and no element
+is named after it, so a password on the page cannot reach the classifier, the writer, or the
+disk. Password inputs and fields whose `autocomplete` asks for a credential or card data are
+marked, and the loop refuses to type into them, or into any field labelled like one, before
+the writer is asked.
 
 ### Browser run folder and replay
 

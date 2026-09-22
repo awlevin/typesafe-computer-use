@@ -25,6 +25,6 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv python install 3.12
       - run: uv venv --python 3.12
-      - run: uv pip install pillow anthropic==1.6.0 openai==2.54.0 typesafe-sdk==0.6.0 pytest==9.1.1 ruff==0.16.8
+      - run: uv pip install pillow anthropic==1.6.0 openai==2.54.0 typesafe-sdk==0.6.0 websocket-client==1.9.0 pytest==9.1.1 ruff==0.16.8
       - run: uv pip install -e . --no-deps
       - run: uv run --no-project pytest -q
