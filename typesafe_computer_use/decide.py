@@ -86,9 +86,15 @@ def site_criteria() -> dict[str, str]:
     }
 
 
-def base_state(goal: str, screen: Screen, items: list[Item], history: list[str]) -> dict:
+def base_state(
+    goal: str,
+    screen: Screen,
+    items: list[Item],
+    history: list[str],
+    feedback: dict | None = None,
+) -> dict:
     hints = date_hints(items, screen)
-    return {
+    state = {
         "goal": goal,
         "now": now_context(),
         "frontmost_app": screen.app,
@@ -107,6 +113,9 @@ def base_state(goal: str, screen: Screen, items: list[Item], history: list[str])
         ],
         **({"offscreen_controls": offscreen_records(screen.offscreen)} if screen.offscreen else {}),
     }
+    if feedback:
+        state["last_action_feedback"] = feedback
+    return state
 
 
 @dataclass(frozen=True)
@@ -150,14 +159,23 @@ class Decision:
 
 
 def decide(
-    client: TypeSafeClient, goal: str, screen: Screen, items: list[Item], history: list[str], browser: str, email: str | None
+    client: TypeSafeClient,
+    goal: str,
+    screen: Screen,
+    items: list[Item],
+    history: list[str],
+    browser: str,
+    email: str | None,
+    feedback: dict | None = None,
 ) -> Decision:
     questions = {
         "kind": Choice(
             instructions=(
                 "You are driving this computer one action at a time. Which kind of action "
-                "makes the most progress toward the goal right now? Do not repeat an action "
-                "that was just taken unless the screen changed."
+                "makes the most progress toward the goal right now? Use last_action_feedback "
+                "as observed postcondition evidence. Do not repeat an action that was just taken "
+                "when the screen did not change; choose wait or a genuinely different action. "
+                "Confidence should reflect the current OCR evidence and feedback, not the goal alone."
             ),
             criteria=kind_criteria(browser, email, bool(screen.offscreen)),
         ),
@@ -175,7 +193,8 @@ def decide(
             instructions=(
                 "If clicking an on-screen item is the right move, which item? Items marked with a "
                 "role come from the app's accessibility tree and are real controls; plain items are "
-                "text read from the screen."
+                "text read from the screen. If feedback says the last click produced no observable "
+                "change, choose a different item only when the current screen clearly supports it."
             ),
             criteria=item_criteria(screen, items),
         )
@@ -188,7 +207,7 @@ def decide(
             ),
             criteria=offscreen_criteria(screen.offscreen),
         )
-    answers = client.system_one(state=base_state(goal, screen, items, history), questions=questions).answers
+    answers = client.system_one(state=base_state(goal, screen, items, history, feedback), questions=questions).answers
     return Decision(kind=answers["kind"], item=answers.get("item"), site=answers["site"], offscreen=answers.get("offscreen"))
 
 

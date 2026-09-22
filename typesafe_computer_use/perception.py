@@ -6,13 +6,32 @@ import math
 from dataclasses import replace
 from pathlib import Path
 
-from ocrmac import ocrmac
 from PIL import Image, ImageChops, ImageStat
 
-from . import macos
+from . import host as macos
+from . import ocr_backend
 from .config import MAX_OPTIONS, MIN_OCR_CONFIDENCE
 from .models import AxNode, Box, Item, Screen
 from .timing import OCR_RECTS, OCR_REGION_PCT, phase
+
+
+class _OCRResult:
+    def __init__(self, image):
+        self.image = image
+
+    def recognize(self, px: bool = True):
+        return ocr_backend.recognize(self.image)
+
+
+class _OCRFacade:
+    """Keep the original test seam while routing OCR by platform."""
+
+    @staticmethod
+    def OCR(image, recognition_level: str = "accurate"):
+        return _OCRResult(image)
+
+
+ocrmac = _OCRFacade()
 
 Line = tuple[str, float, Box]
 ECHO_CHARS = 24
@@ -78,6 +97,7 @@ def perceive(
     goal: str,
     timing: dict[str, float] | None = None,
     cache: OcrCache | None = None,
+    ocr_only: bool = False,
 ) -> list[Item]:
     """Everything worth clicking on this screen: OCR text blocks, plus the app's own controls.
 
@@ -94,7 +114,7 @@ def perceive(
     with phase(timing, "ocr"):
         blocks = ocr(screen, budget, goal, cache, timing)
     with phase(timing, "ax"):
-        nodes, hidden = ax_nodes(screen, budget)
+        nodes, hidden = ax_nodes(screen, budget, ocr_only=ocr_only)
         controls = to_ax_items(nodes, screen.scale)
     merged = merge_with_origins(blocks, controls, budget)
     screen.ax_refs.clear()
@@ -204,10 +224,10 @@ def _read_region(screen: Screen, region: Box, thumb: Image.Image, cache: OcrCach
 def ocr_region(screen: Screen) -> Box:
     """The part of the capture worth reading, in capture pixels.
 
-    The frontmost window with a margin, joined with the menu bar strip over the same columns and
-    clamped to the display. Text on the desktop and in background windows is noise to the decision,
-    so it is left unread. Clipping the strip to the window's x-range is what makes the crop worth
-    anything on a full-height window, whose own rectangle already reaches the bottom of the display.
+    On macOS, include the menu-bar strip over the frontmost window's columns. On Windows, the
+    window rectangle already includes the title bar and there is no app menu bar above it, so adding
+    the full y=0..window-bottom strip would read unrelated windows on a vertically stacked desktop.
+    In both cases, text outside the frontmost window is left unread.
 
     The cost is that status items to the right of the window, the clock and the menu extras, go
     unread. They stay clickable: the accessibility tree lists them as AXMenuBarItem controls.
@@ -218,6 +238,9 @@ def ocr_region(screen: Screen) -> Box:
     x, y, w, h = screen.window
     scale, margin = screen.scale, REGION_MARGIN_PT
     window = ((x - margin) * scale, (y - margin) * scale, (x + w + margin) * scale, (y + h + margin) * scale)
+    if getattr(macos, "IS_WINDOWS", False):
+        clamped = (max(0.0, window[0]), max(0.0, window[1]), min(width, window[2]), min(height, window[3]))
+        return clamped if clamped[2] > clamped[0] and clamped[3] > clamped[1] else (0.0, 0.0, width, height)
     joined = (window[0], min(window[1], 0.0), window[2], max(window[3], MENU_BAR_PT * scale))
     clamped = (max(0.0, joined[0]), max(0.0, joined[1]), min(width, joined[2]), min(height, joined[3]))
     return clamped if clamped[2] > clamped[0] and clamped[3] > clamped[1] else (0.0, 0.0, width, height)
@@ -428,13 +451,13 @@ def merge_reocr(previous: list[Line], fresh: list[Line], rects: list[Box]) -> li
     return [ln for ln in previous if not any(boxes_intersect(ln[2], rect) for rect in rects)] + list(fresh)
 
 
-def ax_nodes(screen: Screen, budget: int) -> tuple[list[AxNode], list[AxNode]]:
+def ax_nodes(screen: Screen, budget: int, ocr_only: bool = False) -> tuple[list[AxNode], list[AxNode]]:
     """The frontmost app's labelled controls, in screen points, and the off-screen ones it still exposes.
 
     Icon-only buttons are invisible to OCR and live only here. Accessibility is best effort:
     a missing pid, a refusing app, or a raising bridge all mean OCR carries the step alone.
     """
-    if screen.pid is None:
+    if ocr_only or screen.pid is None:
         return [], []
     width_pt, height_pt = screen.size_pt
     try:

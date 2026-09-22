@@ -9,7 +9,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import config, macos
+from . import config
+from . import host as macos
 from .actions import Context
 from .perception import capture, perceive
 from .report import annotate, ax_count, render_payload
@@ -36,6 +37,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--steps", type=int, default=config.DEFAULT_STEPS, help="max actions before stopping")
     parser.add_argument("--min-confidence", type=float, default=config.DEFAULT_MIN_CONFIDENCE, help="stop below this confidence")
     parser.add_argument("--delay", type=float, default=config.DEFAULT_DELAY, help="seconds to wait after each action")
+    parser.add_argument(
+        "--ocr-only",
+        action="store_true",
+        help="skip UI Automation and use OCR boxes plus coordinate actions (useful for canvas games)",
+    )
     parser.add_argument("--out", type=Path, default=Path("runs") / time.strftime("%Y%m%d-%H%M%S"), help="run folder")
     parser.add_argument("--image", type=Path, help="replay a saved capture instead of the live screen (never acts)")
     parser.add_argument("--app", help="frontmost app to report during replay")
@@ -56,6 +62,7 @@ def main(argv: list[str] | None = None) -> None:
         steps=args.steps,
         min_confidence=args.min_confidence,
         delay=args.delay,
+        ocr_only=args.ocr_only,
         image=args.image,
         app=args.app,
         url=args.url,
@@ -84,6 +91,7 @@ def inspect(argv: list[str] | None = None) -> None:
     parser.add_argument("goal", nargs="?", default="(no goal given)")
     parser.add_argument("--countdown", type=int, default=3)
     parser.add_argument("--no-open", action="store_true", help="write files without opening them")
+    parser.add_argument("--ocr-only", action="store_true", help="skip UI Automation and inspect OCR items only")
     parser.add_argument("--out", type=Path, default=Path("inspections") / time.strftime("%Y%m%d-%H%M%S"))
     args = parser.parse_args(argv)
     config.load_dotenv(DOTENV)
@@ -97,7 +105,7 @@ def inspect(argv: list[str] | None = None) -> None:
     browser = config.browser()
     timing: dict[str, float] = {}
     screen = capture(browser=browser, timing=timing)
-    items = perceive(screen, config.MAX_OPTIONS, args.goal, timing)
+    items = perceive(screen, config.MAX_OPTIONS, args.goal, timing, ocr_only=args.ocr_only)
     annotated = args.out / "annotated.png"
     text = args.out / "state.txt"
     screen.image.save(args.out / "raw.png")
@@ -111,5 +119,9 @@ def inspect(argv: list[str] | None = None) -> None:
     print(format_timing(timing))
     print(f"  {annotated}\n  {text}")
     if not args.no_open:
-        subprocess.run(["open", str(annotated)], check=False)
-        subprocess.run(["open", "-t", str(text)], check=False)
+        if sys.platform == "win32":
+            os.startfile(annotated)  # type: ignore[attr-defined]
+            os.startfile(text)  # type: ignore[attr-defined]
+        else:
+            subprocess.run(["open", str(annotated)], check=False)
+            subprocess.run(["open", "-t", str(text)], check=False)

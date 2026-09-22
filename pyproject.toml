@@ -1,18 +1,20 @@
 [project]
 name = "typesafe-computer-use"
 version = "0.1.0"
-description = "Cheap, fast computer use on macOS: deterministic screen state, a TypeSafe classifier for every decision, a writer model only for free text."
+description = "Cheap, fast computer use on macOS and Windows: deterministic screen state, a TypeSafe classifier for every decision, a writer model only for free text."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 authors = [{ name = "Aaron Levin" }]
-keywords = ["computer-use", "automation", "ocr", "typesafe", "macos", "agents"]
+keywords = ["computer-use", "automation", "ocr", "typesafe", "macos", "windows", "agents"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: MacOS X",
+    "Environment :: Win32 (MS Windows)",
     "Intended Audience :: Developers",
     "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -20,9 +22,12 @@ classifiers = [
 ]
 dependencies = [
     "anthropic==1.6.0",
-    "ocrmac==1.0.1",
-    "pyobjc-framework-ApplicationServices==12.2.2",
-    "pyobjc-framework-Quartz==12.2.2",
+    "ocrmac==1.0.1; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices==12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz==12.2.2; sys_platform == 'darwin'",
+    "numpy>=2.0; sys_platform == 'win32'",
+    "pywinauto==0.6.9; sys_platform == 'win32'",
+    "rapidocr-onnxruntime>=1.4.4; sys_platform == 'win32'",
     "typesafe-sdk==0.6.0",
 ]
 

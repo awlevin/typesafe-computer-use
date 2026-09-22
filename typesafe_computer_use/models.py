@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, fields
 
 from PIL import Image
 
-TEXT_ROLES = {"AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"}
+TEXT_ROLES = {"AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "Edit", "Document", "ComboBox"}
 Box = tuple[float, float, float, float]  # x1, y1, x2, y2 in capture pixels
 
 # Accessibility roles as one human word. Anything unlisted is "other".
@@ -28,6 +28,19 @@ ROLE_WORDS = {
     "AXTab": "tab",
     "AXTextArea": "field",
     "AXTextField": "field",
+    "Button": "button",
+    "CheckBox": "checkbox",
+    "ComboBox": "field",
+    "Document": "field",
+    "Edit": "field",
+    "Hyperlink": "link",
+    "ListItem": "cell",
+    "MenuItem": "menu",
+    "RadioButton": "radio",
+    "ScrollBar": "scrollbar",
+    "Slider": "slider",
+    "TabItem": "tab",
+    "TreeItem": "cell",
 }
 
 

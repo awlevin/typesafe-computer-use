@@ -300,6 +300,28 @@ uv run pytest -q
 
 CI runs the same on macOS. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Experimental Windows port
+
+The isolated Windows adapter in `windows.py` uses Win32 for the foreground
+window and input boundary, pywinauto for Microsoft UI Automation controls, and
+RapidOCR for screen text. The decision loop remains the same, but the port is
+experimental and should be run from a visible desktop PowerShell session.
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+$env:TYPESAFE_API_KEY = "<use-a-fresh-key>"
+clicker-inspect "list the visible controls; do not click anything" --ocr-only --no-open
+```
+
+`--ocr-only` skips UI Automation and is the preferred mode for Unity/canvas
+apps: Jev selects an OCR box, then the Windows adapter clicks its
+screen-coordinate center.
+
+Start with dry-run mode and a low step limit. Do not use it on passwords,
+purchases, account settings, or form submission until the postcondition is
+checked independently. The adapter is experimental and requires an interactive
+Windows desktop session.
+
 ## License
 
 [MIT](LICENSE)

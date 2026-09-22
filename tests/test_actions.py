@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from typesafe_computer_use import actions, macos
+from typesafe_computer_use import actions
+from typesafe_computer_use import host as macos
 from typesafe_computer_use.actions import click_item, fill_field, press_offscreen
 from typesafe_computer_use.models import AxNode, Field, Item
 

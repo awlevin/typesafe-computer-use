@@ -1,6 +1,10 @@
+import sys
 from dataclasses import replace
 
 import pytest
+
+if sys.platform != "darwin":
+    pytest.skip("macOS accessibility-tree tests require the macOS bridge", allow_module_level=True)
 
 from typesafe_computer_use import macos, perception
 from typesafe_computer_use.macos import AxAttrs, walk_actionable
