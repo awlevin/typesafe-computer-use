@@ -6,7 +6,7 @@ import pytest
 
 from typesafe_computer_use import actions
 from typesafe_computer_use.actions import click_item, fill_field, press_offscreen
-from typesafe_computer_use.models import AxNode, Field, Item
+from typesafe_computer_use.models import AxNode, Field, Item, Missed
 from typesafe_computer_use.platform_adapter import desktop
 from typesafe_computer_use.writer import make_writer
 
@@ -49,6 +49,15 @@ def test_an_ocr_only_item_is_clicked_without_asking_accessibility(screen, calls,
     item = Item(3, "Register Now", 0.9, 100.0, 100.0, 300.0, 140.0)
     assert click_item(item, screen) == "clicked 'Register Now'"
     assert calls == [("click", (100.0, 60.0))]
+
+
+def test_a_click_that_could_not_be_aimed_is_refused_and_the_run_goes_on(screen, monkeypatch):
+    def miss(point):
+        raise Missed("the cursor went to (0, 0), not (100, 60)")
+
+    monkeypatch.setattr(desktop, "click_at", miss)
+    item = Item(3, "Register Now", 0.9, 100.0, 100.0, 300.0, 140.0)
+    assert click_item(item, screen) == "click refused: 'Register Now' was not clicked, the cursor went to (0, 0), not (100, 60)"
 
 
 def test_an_off_screen_control_is_pressed_through_accessibility(screen, calls, monkeypatch):

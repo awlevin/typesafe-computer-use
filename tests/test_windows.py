@@ -5,7 +5,7 @@ import ctypes
 import pytest
 
 from typesafe_computer_use import windows
-from typesafe_computer_use.models import ROLE_WORDS, TEXT_ROLES
+from typesafe_computer_use.models import ROLE_WORDS, TEXT_ROLES, Missed
 from typesafe_computer_use.windows import (
     KEYEVENTF_EXTENDEDKEY,
     KEYEVENTF_KEYUP,
@@ -151,12 +151,12 @@ def test_a_click_lands_only_where_the_cursor_went():
     assert not landed((100, 200), (100.0, 260.0))
 
 
-def test_a_click_that_did_not_land_is_refused(monkeypatch):
+def test_a_click_that_did_not_land_presses_nothing(monkeypatch):
     sent = []
     monkeypatch.setattr(windows, "_move", lambda point: None)
     monkeypatch.setattr(windows, "mouse_location", lambda: (0.0, 0.0))
     monkeypatch.setattr(windows, "_send", sent.append)
-    with pytest.raises(RuntimeError, match="click refused"):
+    with pytest.raises(Missed, match="not \\(640, 480\\)"):
         windows.click_at((640.0, 480.0))
     assert sent == []
 

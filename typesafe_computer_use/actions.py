@@ -10,7 +10,7 @@ from typesafe_sdk import TypeSafeClient
 
 from .config import SITES
 from .decide import OFFSCREEN_PREFIX, Decision, row_mates, verify_typed
-from .models import Field, Guidance, Item, Screen
+from .models import Field, Guidance, Item, Missed, Screen
 from .platform_adapter import desktop
 from .writer import Writer, WriterError, compose_text, compose_url
 
@@ -56,7 +56,10 @@ def click_item(item: Item, screen: Screen) -> str:
     ref = screen.ax_refs.get(item.index)
     if ref is not None and desktop.ax_press(ref):
         return f"pressed {item.text!r} via accessibility"
-    desktop.click_at(screen.to_points(item))
+    try:
+        desktop.click_at(screen.to_points(item))
+    except Missed as e:
+        return f"click refused: {item.text!r} was not clicked, {e}"
     if ref is None:
         return f"clicked {item.text!r}"
     return f"clicked {item.text!r} (accessibility press did not take)"

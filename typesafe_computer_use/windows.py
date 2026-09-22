@@ -32,7 +32,7 @@ from PIL import Image, ImageGrab
 
 from .ax_walk import AX_PRESS, AxAttrs, Frame, walk_actionable
 from .config import ABORT_CORNER_PX
-from .models import Abort, AxNode, Field
+from .models import Abort, AxNode, Field, Missed
 
 with suppress(AttributeError, OSError):  # pre-8.1 Windows without shcore, or awareness set by the host process
     ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
@@ -262,13 +262,13 @@ def click_at(point: tuple[float, float]) -> None:
     """Move, read back where the cursor landed, then press and release there.
 
     A cursor that did not reach the target (another desktop has the input, or the point is off
-    every monitor) means the click would land somewhere unknown, so it is refused with an error.
+    every monitor) means the click would land somewhere unknown, so nothing is pressed.
     """
     target = (round(point[0]), round(point[1]))
     _move(target)
     actual = mouse_location()
     if not landed(target, actual):
-        raise RuntimeError(f"click refused: the cursor went to {actual}, not {target}")
+        raise Missed(f"the cursor went to {actual}, not {target}")
     _send(_mouse(MOUSEEVENTF_LEFTDOWN))
     _send(_mouse(MOUSEEVENTF_LEFTUP))
 
