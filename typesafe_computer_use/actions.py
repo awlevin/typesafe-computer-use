@@ -27,6 +27,7 @@ class Context:
     writer: Writer | None
     history: list[str]
     ask: Callable[[str], str] | None = None  # puts the writer's question to the user; None when nobody is there to answer
+    answerer: Writer | None = None  # reads the screen when the classifier stops; None leaves it to the writer
     guidance: Guidance = field(default_factory=Guidance)  # the runner replaces the context when the writer or the user adds to it
 
 

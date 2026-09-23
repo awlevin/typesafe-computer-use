@@ -85,8 +85,12 @@ class RunState:
     calls: Calls = field(default_factory=Calls)  # requests to each model, over the whole run
 
 
-def run(cfg: RunConfig, ctx_factory) -> RunState:
-    """Drive the loop. ctx_factory(typesafe, history) builds the action Context."""
+def run(cfg: RunConfig, ctx_factory, classifier=None) -> RunState:
+    """Drive the loop. ctx_factory(typesafe, history) builds the action Context.
+
+    `classifier` opens the classifier for this run, as a context manager; TypeSafe's own client,
+    reading TYPESAFE_API_KEY, when it is not given.
+    """
     cfg.out.mkdir(parents=True, exist_ok=True)
     log = Log(cfg.out / "run.log")
     log(f"run folder: {cfg.out}")
@@ -96,7 +100,7 @@ def run(cfg: RunConfig, ctx_factory) -> RunState:
     state = RunState()
     started = time.time()
     try:
-        with TypeSafeClient() as typesafe:
+        with (classifier or TypeSafeClient)() as typesafe:
             ctx = metered(ctx_factory(typesafe, state.history), state.calls)
             for step in range(1, cfg.steps + 1):
                 if run_step(cfg, ctx, state, step, log):
@@ -139,6 +143,7 @@ def metered(ctx: Context, calls: Calls) -> Context:
         ctx,
         typesafe=MeteredClassifier(ctx.typesafe, calls),
         writer=MeteredWriter(ctx.writer, calls) if ctx.writer is not None else None,
+        answerer=MeteredWriter(ctx.answerer, calls) if ctx.answerer is not None else None,
     )
 
 
@@ -157,8 +162,8 @@ def hand_off(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     stopped = STOPPED.get(state.outcome)
     if stopped is None:
         return False
-    if ctx.writer is None:
-        log("\nno answer: the writer is disabled (set ANTHROPIC_API_KEY or CLICKER_WRITER_BASE_URL)")
+    if (ctx.answerer or ctx.writer) is None:
+        log("\nno answer: the writer is disabled (set ANTHROPIC_API_KEY or CLICKER_WRITER_BASE_URL, or choose one in the app)")
         return False
     if state.handoffs and state.handoffs[-1].actions == len(state.history) and state.answer is not None:
         log(f"\nanswer ({verdict(state.answer)}; the focus led to no action, so the last answer stands):\n  {state.answer.text}")
@@ -226,7 +231,16 @@ def review(cfg: RunConfig, ctx: Context, state: RunState, stopped: str, can_ask:
     earlier = earlier_screens(state, signature(screen, items))
     earlier_stops = [{"after_action": h.actions, "why": STOPPED[h.outcome], "focus_given": h.focus} for h in state.handoffs]
     return compose_answer(
-        ctx.writer, cfg.goal, screen, items, state.history, stopped, earlier, state.guidance, earlier_stops, can_ask
+        ctx.answerer or ctx.writer,
+        cfg.goal,
+        screen,
+        items,
+        state.history,
+        stopped,
+        earlier,
+        state.guidance,
+        earlier_stops,
+        can_ask,
     )
 
 

@@ -8,13 +8,22 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import anthropic
 import openai
 from PIL import Image
 
-from .config import answer_model, custom_writer_endpoint, writer_api, writer_base_url, writer_model, writer_vision
+from .config import (
+    ANTHROPIC_HOST,
+    answer_model,
+    custom_writer_endpoint,
+    writer_api,
+    writer_base_url,
+    writer_model,
+    writer_vision,
+)
 from .dates import now_context
 from .models import Field, Guidance, Item, Screen
 from .openai_writer import OpenAIWriter
@@ -24,7 +33,7 @@ ANSWER_IMAGE_EDGE = 1568  # the longest edge a vision model reads without shrink
 PLACEHOLDER_KEY = "not-needed"  # an endpoint you host yourself does not check a key
 
 
-type Writer = anthropic.Anthropic | OpenAIWriter  # both answer `messages.create` the Anthropic way
+type Writer = anthropic.Anthropic | OpenAIWriter | Configured  # all answer `messages.create` the Anthropic way
 
 
 class WriterError(Exception):
@@ -56,8 +65,67 @@ def make_writer() -> Writer | None:
     return None
 
 
+def client_for(api: str, base_url: str | None, key: str | None) -> anthropic.Anthropic | OpenAIWriter | None:
+    """A client for one endpoint the settings name, or None when it has nothing to authenticate with.
+
+    The same two clients `make_writer` builds, with the same rule: a key goes only to the endpoint
+    it was given for. A key for Anthropic's own API goes to that API by name, never to an
+    ANTHROPIC_BASE_URL the environment may hold for another key. With no key at all, the SDK reads
+    the environment's own pair, ANTHROPIC_AUTH_TOKEN included, exactly as `make_writer` does.
+    """
+    if api == "openai":
+        if not base_url:
+            raise ValueError("an OpenAI-compatible writer needs a base URL, such as http://localhost:1234/v1")
+        return OpenAIWriter(base_url, key or PLACEHOLDER_KEY)
+    if base_url:
+        return anthropic.Anthropic(base_url=base_url, api_key=key or PLACEHOLDER_KEY, auth_token=key or PLACEHOLDER_KEY)
+    if key:
+        return anthropic.Anthropic(api_key=key, base_url=f"https://{ANTHROPIC_HOST}")
+    client = anthropic.Anthropic()
+    return client if client.api_key or client.auth_token else None
+
+
+class Configured:
+    """A writer client with the model the settings chose for it, and whether that model reads images.
+
+    The environment names one endpoint and two models, one for writing and one for answering. The
+    settings may name two endpoints, so each carries its own model, and every request through it is
+    sent to that model whatever the caller asked. `custom` is what `custom_writer_endpoint` says of
+    the environment, said of this endpoint.
+    """
+
+    def __init__(self, client: anthropic.Anthropic | OpenAIWriter, model: str, vision: bool, label: str):
+        self.client = client
+        self.model = model
+        self.vision = vision
+        self.label = label
+        self.base_url = client.base_url
+        self.custom = isinstance(client, OpenAIWriter) or client.base_url.host != ANTHROPIC_HOST
+        self.messages = SimpleNamespace(create=self._create)
+
+    def _create(self, **request):
+        return self.client.messages.create(**{**request, "model": self.model})
+
+
+def speaks_to_anthropic(writer: Writer) -> bool:
+    """Whether the writer's endpoint is Anthropic's own API: said by a configured writer, else by the environment."""
+    custom = getattr(writer, "custom", None)
+    return not (custom_writer_endpoint() if custom is None else custom)
+
+
+def reads_images(writer: Writer) -> bool:
+    """Whether the answer model gets the screenshot. CLICKER_WRITER_VISION, when set, decides; otherwise
+    a configured writer knows its own model, and anything else reads images as it always did."""
+    if os.environ.get("CLICKER_WRITER_VISION", "").strip():
+        return writer_vision()
+    vision = getattr(writer, "vision", None)
+    return writer_vision() if vision is None else bool(vision)
+
+
 def provider(writer: Writer) -> str:
     """Where the writer sends its requests, for logging. Credentials and query in the URL are left out."""
+    if isinstance(writer, Configured):
+        return writer.label
     url = writer.base_url
     port = f":{url.port}" if url.port else ""
     where = f"{url.scheme}://{url.host}{port}{url.path.rstrip('/')}"
@@ -78,7 +146,7 @@ def _structured(
     if image is not None:
         content.insert(0, _image_block(image))
     extra: dict = {}
-    if custom_writer_endpoint():
+    if not speaks_to_anthropic(writer):
         # Anthropic enforces output_config. Another endpoint may ignore it without a word, so the
         # schema is spelled out in the prompt as well.
         system = f"{system}\n\nAnswer with a single JSON object and nothing else, matching this schema:\n{json.dumps(schema)}"
@@ -389,7 +457,7 @@ def compose_answer(
         },
         max_tokens=1024,
         model=answer_model(),
-        image=screen.image if writer_vision() else None,
+        image=screen.image if reads_images(writer) else None,
     )
     return Answer(
         text=data["answer"].strip(), achieved=data["achieved"], focus=data["focus"].strip(), question=data["question"].strip()

@@ -200,17 +200,35 @@ def endpoint():
     """A writer endpoint on localhost, as a proxy or a local model would serve one.
 
     It answers the Anthropic Messages API or OpenAI's Chat Completions API by path, records each
-    request with its headers, and replies with `state["reply"]`. `state["reject"]` may return an
-    error message for a request body, which then gets a 400, the way an endpoint refuses a parameter.
+    request with its headers, and replies with `state["reply"]`, or with `state["reply"](body)` when
+    that is a callable. `state["reject"]` may return an error message for a request body, which then
+    gets a 400, the way an endpoint refuses a parameter. A GET of `/models` lists `state["models"]`.
     """
     seen: list[dict] = []
-    state: dict = {"reply": '{"ok": true, "url": "https://example.com", "reason": ""}', "reject": lambda body: None}
+    state: dict = {
+        "reply": '{"ok": true, "url": "https://example.com", "reason": ""}',
+        "reject": lambda body: None,
+        "models": ["model-a"],
+    }
 
     class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": None})
+            listing = [
+                {"id": name, "object": "model", "type": "model", "created": 0, "owned_by": "test"} for name in state["models"]
+            ]
+            data = json.dumps({"object": "list", "data": listing, "has_more": False}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             seen.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
             refusal = state["reject"](body)
+            reply = state["reply"](body) if callable(state["reply"]) else state["reply"]
             if refusal:
                 status, out = 400, {"type": "error", "error": {"type": "invalid_request_error", "message": refusal}}
             elif self.path.endswith("/chat/completions"):
@@ -221,9 +239,7 @@ def endpoint():
                         "object": "chat.completion",
                         "created": 0,
                         "model": body["model"],
-                        "choices": [
-                            {"index": 0, "message": {"role": "assistant", "content": state["reply"]}, "finish_reason": "stop"}
-                        ],
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
                     },
                 )
             else:
@@ -234,7 +250,7 @@ def endpoint():
                         "type": "message",
                         "role": "assistant",
                         "model": body["model"],
-                        "content": [{"type": "text", "text": state["reply"]}],
+                        "content": [{"type": "text", "text": reply}],
                         "stop_reason": "end_turn",
                         "stop_sequence": None,
                         "usage": {"input_tokens": 1, "output_tokens": 1},
