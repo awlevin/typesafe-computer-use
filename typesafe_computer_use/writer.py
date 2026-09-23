@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import os
+import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -15,7 +16,7 @@ from PIL import Image
 
 from .config import answer_model, custom_writer_endpoint, writer_api, writer_base_url, writer_model, writer_vision
 from .dates import now_context
-from .models import Guidance, Item, Screen
+from .models import Field, Guidance, Item, Screen
 from .openai_writer import OpenAIWriter
 from .perception import near_field
 
@@ -148,7 +149,13 @@ def compose_text(
     history: list[str],
     guidance: Guidance | None = None,
 ) -> str:
-    """The exact string to type into the focused field. Empty means the writer declined."""
+    """The exact string to type into the focused field. Empty means the writer declined or was refused.
+
+    A field that asks for a credential is refused before any request is made, whichever endpoint
+    the writer is: the prompt tells the model not to fill one, and this is the code-side guard.
+    """
+    if screen.field is None or credential_field(screen.field):
+        return ""
     packet = {
         "goal": goal,
         **(guidance.state() if guidance else {}),
@@ -216,9 +223,24 @@ CREDENTIAL_HINTS = (
 )
 
 
+# A short hint matches as a whole word only: "pin" is in "Shipping address" and "Typing speed" too.
+SHORT_HINT = 4
+_CREDENTIAL = re.compile(
+    "|".join(
+        rf"(?<![a-z0-9]){re.escape(hint)}(?![a-z0-9])" if len(hint) <= SHORT_HINT else re.escape(hint)
+        for hint in CREDENTIAL_HINTS
+    )
+)
+
+
 def looks_credential(label: str) -> bool:
-    lowered = (label or "").lower()
-    return any(hint in lowered for hint in CREDENTIAL_HINTS)
+    return _CREDENTIAL.search((label or "").lower()) is not None
+
+
+def credential_field(field: Field) -> bool:
+    """Whether a focused field asks for a credential: the platform marks it secure, or its label or
+    placeholder names one. Nothing is typed or pasted into such a field on any path."""
+    return field.secure or looks_credential(field.label) or looks_credential(field.placeholder)
 
 
 def compose_browser_text(

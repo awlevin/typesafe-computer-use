@@ -12,7 +12,7 @@ from .config import SITES
 from .decide import OFFSCREEN_PREFIX, Decision, row_mates, verify_typed
 from .models import Field, Guidance, Item, Missed, Screen
 from .platform_adapter import desktop
-from .writer import Writer, WriterError, compose_text, compose_url
+from .writer import Writer, WriterError, compose_text, compose_url, credential_field
 
 VERIFY_THRESHOLD = 0.5
 WAIT_SECONDS = 3.0  # what a wait adds to the settle delay every step already gets; three of them cover a slow page
@@ -145,6 +145,8 @@ def _use_browser(decision: Decision, screen, items, ctx: Context) -> str:
 def _type_email(decision, screen: Screen, items, ctx: Context) -> str:
     if not (screen.field and screen.field.is_text):
         return "type_email refused: no text field is focused"
+    if credential_field(screen.field):
+        return "type_email refused: the focused field asks for a credential"
     how = fill_field(screen.field, ctx.email or "")
     return f"typed email {how}"
 
@@ -152,6 +154,8 @@ def _type_email(decision, screen: Screen, items, ctx: Context) -> str:
 def _type_text(decision, screen: Screen, items, ctx: Context) -> str:
     if not (screen.field and screen.field.is_text):
         return "type_text refused: no text field is focused"
+    if credential_field(screen.field):
+        return "type_text refused: the focused field asks for a credential"
     if ctx.writer is None:
         return "type_text refused: no writer available"
     try:

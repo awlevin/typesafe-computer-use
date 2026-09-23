@@ -11,7 +11,7 @@ from typesafe_computer_use.decide import (
     row_mates,
     site_criteria,
 )
-from typesafe_computer_use.models import AxNode, Guidance
+from typesafe_computer_use.models import AxNode, Field, Guidance
 
 
 def answer(choice, confidence, probabilities=None):
@@ -85,10 +85,26 @@ def test_site_criteria_covers_the_catalog_a_site_outside_it_and_no_site():
     assert "already open" in crit["none"]
 
 
+FOCUSED = Field(role="AXTextField", label="Email", placeholder="", value="", x=0, y=0, w=100, h=20)
+
+
 def test_kind_criteria_offers_email_only_when_set():
-    assert "type_email" not in kind_criteria("Google Chrome", None)
-    assert "type_email" in kind_criteria("Google Chrome", "user@example.com")
+    assert "type_email" not in kind_criteria("Google Chrome", None, field=FOCUSED)
+    assert "type_email" in kind_criteria("Google Chrome", "user@example.com", field=FOCUSED)
     assert "click_item" in kind_criteria("Google Chrome", None)
+
+
+def test_typing_is_offered_only_when_a_text_field_has_the_focus():
+    for field in (None, replace(FOCUSED, role="AXButton")):
+        crit = kind_criteria("Google Chrome", "user@example.com", field=field)
+        assert "type_text" not in crit and "type_email" not in crit
+    assert "'Email'" in kind_criteria("Google Chrome", None, field=FOCUSED)["type_text"]  # it says where it would type
+
+
+def test_typing_is_never_offered_into_a_credential_field():
+    for field in (replace(FOCUSED, secure=True), replace(FOCUSED, label="Password"), replace(FOCUSED, placeholder="Enter PIN")):
+        crit = kind_criteria("Google Chrome", "user@example.com", field=field)
+        assert "type_text" not in crit and "type_email" not in crit
 
 
 def test_item_criteria_and_state_carry_region_and_dates(screen, make_item):

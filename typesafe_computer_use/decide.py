@@ -10,6 +10,7 @@ from typesafe_sdk import Choice, ChoiceAnswer, Noul, TypeSafeClient
 from .config import SITES
 from .dates import date_hints, now_context
 from .models import AxNode, Field, Guidance, Item, Screen
+from .writer import credential_field
 
 STOP_KINDS = ("done", "none")
 OFFSCREEN_PREFIX = "offscreen:"
@@ -26,18 +27,31 @@ FOCUS_RULE = (
 )
 
 
-def fixed_actions(browser: str, email: str | None) -> dict[str, str]:
-    """Deterministic actions offered alongside click_item. Keep them mutually exclusive."""
+def describe_field(field: Field) -> str:
+    """The focused field in words, so a typing action says what it would type into."""
+    name = field.label.strip() or field.placeholder.strip()
+    return f"the focused text field, {name!r}" if name else "the focused text field"
+
+
+def typable(field: Field | None) -> bool:
+    """Whether typing could run this step: a text field has the focus, and it asks for no credential."""
+    return field is not None and field.is_text and not credential_field(field)
+
+
+def fixed_actions(browser: str, email: str | None, field: Field | None = None) -> dict[str, str]:
+    """Deterministic actions offered alongside click_item. Keep them mutually exclusive.
+
+    Typing is offered only when it could run. An action that cannot is worse than one that is
+    missing: it takes probability with it, and the confidence left over may fall under the floor
+    and stop a run that had a good move. Measured on a live run, a type_text offered with no field
+    focused held the winning click to 0.38; without it the same step picked the click at 0.73.
+    """
     actions = {
         "use_browser": (
             f"Work in {browser}: bring it to the front, and open a website there if one is needed. The "
             "site question says which website, or says that the page already open there is the one to "
             "continue with. This is the only way to reach a website: never click the address bar, a URL, "
             "or a search box to get there. Works from any app, including this one."
-        ),
-        "type_text": (
-            "Type free text into the focused text field. A writing model composes the text from the "
-            "goal and the field's label. Only valid when a text field is focused and needs content."
         ),
         "press_enter": "Press Return to submit the focused form or field.",
         "press_escape": "Press Escape to dismiss a dialog, menu, or popup.",
@@ -51,19 +65,24 @@ def fixed_actions(browser: str, email: str | None) -> dict[str, str]:
         "done": "The goal is already achieved.",
         "none": "Nothing on screen or in this list helps with the goal.",
     }
-    if email:
-        actions["type_email"] = (
-            "Type the user's email address into the focused text field. Use this, not type_text, "
-            "whenever the field wants an email or username."
+    if typable(field):
+        where = describe_field(field)
+        actions["type_text"] = (
+            f"Type free text into {where}. A writing model composes the text from the goal and the field's label."
         )
+        if email:
+            actions["type_email"] = (
+                f"Type the user's email address into {where}. Use this, not type_text, whenever the field "
+                "wants an email or username."
+            )
     return actions
 
 
-def kind_criteria(browser: str, email: str | None, offscreen: bool = False) -> dict[str, str]:
+def kind_criteria(browser: str, email: str | None, offscreen: bool = False, field: Field | None = None) -> dict[str, str]:
     clicks = {"click_item": "Click one of the on-screen text items (chosen in the item question)."}
     if offscreen:
         clicks["press_offscreen"] = PRESS_OFFSCREEN
-    return {**clicks, **fixed_actions(browser, email)}
+    return {**clicks, **fixed_actions(browser, email, field)}
 
 
 ROW_MATES = 3  # how many neighbours name a duplicated item's row in a criterion; the history line takes them all
@@ -220,7 +239,7 @@ def decide(
                 "tried on this screen: each of those led straight back here."
                 + (FOCUS_RULE if guidance and guidance.focus else "")
             ),
-            criteria=kind_criteria(browser, email, bool(screen.offscreen)),
+            criteria=kind_criteria(browser, email, bool(screen.offscreen), screen.field),
         ),
         "site": Choice(
             instructions=(

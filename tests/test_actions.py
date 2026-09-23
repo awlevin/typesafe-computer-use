@@ -286,3 +286,39 @@ def test_refused_restore_has_no_keyboard_fallback(monkeypatch):
     monkeypatch.setattr(desktop, "ax_set_value", lambda *a: False)
     monkeypatch.setattr(desktop, "clear_field", lambda: pytest.fail("must not clear the current focus"))
     assert not actions.restore_field(field(ref=object()), "new query")
+
+
+# ------------------------------------------------------------------ credentials
+
+
+class _NoRequests:
+    """A writer that fails the test if it is ever asked for anything."""
+
+    def __init__(self):
+        self.messages = SimpleNamespace(create=lambda **request: pytest.fail("no request may be made for a credential field"))
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [
+        {"secure": True},  # the platform says so, whatever the label
+        {"label": "Password"},
+        {"label": "", "placeholder": "One-time code"},
+    ],
+)
+@pytest.mark.parametrize("kind", ["type_text", "type_email"])
+def test_nothing_is_typed_into_a_credential_field_on_any_path(screen, calls, kind, credential):
+    focused = replace(screen, field=replace(field(), **credential))
+    ctx = replace(context(_NoRequests()), email="user@example.com")
+
+    refusal = actions.perform(SimpleNamespace(chosen=kind), focused, [], ctx)
+
+    assert refusal == f"{kind} refused: the focused field asks for a credential"
+    assert calls == []
+
+
+def test_the_writer_itself_refuses_a_credential_field_before_any_request(screen):
+    from typesafe_computer_use.writer import compose_text
+
+    secure = replace(screen, field=replace(field(), secure=True))
+    assert compose_text(_NoRequests(), "log in", secure, [], []) == ""
