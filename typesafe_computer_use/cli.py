@@ -1,29 +1,43 @@
-"""Command-line entry points: `clicker` and `clicker-inspect`."""
+"""Command-line entry points: `clicker`, `clicker-inspect`, and `clicker-gui`."""
 
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from pathlib import Path
 
-from . import config
-from .actions import Context
+from . import config, session
 from .perception import capture, perceive
 from .platform_adapter import desktop
 from .report import annotate, ax_count, render_payload
 from .runner import RunConfig, run
+from .settings import DECISION_PROVIDERS, TEXT_PROVIDERS, Settings
+from .settings import load as load_settings
 from .timing import format_timing
-from .writer import make_writer, provider
 
 DOTENV = Path.cwd() / ".env"
 
 
-def _prepare() -> None:
-    config.load_dotenv(DOTENV)
-    if not os.environ.get("TYPESAFE_API_KEY"):
-        sys.exit("TYPESAFE_API_KEY is not set (export it or put it in .env)")
+def _provider_flags(parser: argparse.ArgumentParser) -> None:
+    """Point one run at other providers without touching the saved settings."""
+    parser.add_argument("--classifier", choices=sorted(DECISION_PROVIDERS), help="who answers each step's decision")
+    parser.add_argument("--classifier-model", help="model for the classifier")
+    parser.add_argument("--writer", choices=sorted(TEXT_PROVIDERS), help="who writes field text and URLs")
+    parser.add_argument("--writer-model", help="model for the writer")
+    parser.add_argument("--answer", choices=sorted(TEXT_PROVIDERS), help="who reads the screen when the classifier stops")
+    parser.add_argument("--answer-model", help="model for the answer")
+
+
+def apply_provider_flags(settings: Settings, args: argparse.Namespace) -> Settings:
+    """The saved settings with this run's flags on top. A new provider starts from its own defaults."""
+    for section, flag in (("decisions", "classifier"), ("writer", "writer"), ("answer", "answer")):
+        endpoint = getattr(settings, section)
+        if getattr(args, flag, None):
+            endpoint.provider, endpoint.model, endpoint.base_url = getattr(args, flag), "", ""
+        if getattr(args, f"{flag}_model", None):
+            endpoint.model = getattr(args, f"{flag}_model")
+    return settings
 
 
 def ask_user(question: str) -> str:
@@ -57,22 +71,31 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--image", type=Path, help="replay a saved capture instead of the live screen (never acts)")
     parser.add_argument("--app", help="frontmost app to report during replay")
     parser.add_argument("--url", help="browser URL to report during replay")
+    parser.add_argument(
+        "--share-clipboard",
+        action="store_true",
+        help="show the classifier the clipboard's text each step, to carry text between apps (off by default: it may hold a password)",
+    )
+    parser.add_argument(
+        "--name-icons",
+        action="store_true",
+        help="have the answer's model name icon-only controls, once per layout (a writer call each; needs a model that reads images)",
+    )
+    _provider_flags(parser)
     args = parser.parse_args(argv)
 
-    _prepare()
+    config.load_dotenv(DOTENV)
+    settings = apply_provider_flags(load_settings(), args)
+    settings.name_icons = settings.name_icons or args.name_icons
     if args.act and not desktop.accessibility_trusted():
         sys.exit("this terminal lacks Accessibility permission; grant it in System Settings > Privacy & Security")
     try:
-        writer = make_writer()
+        services = session.build(settings)
         config.writer_vision()  # a bad value stops the run here, not at its first stop
     except ValueError as e:
         sys.exit(str(e))
-    if writer is None:
-        print(
-            "writer disabled: no ANTHROPIC_API_KEY or CLICKER_WRITER_BASE_URL; type_text, writer-proposed URLs and the final answer need one"
-        )
-    else:
-        print(f"writer: {provider(writer)}")
+    for line in services.describe():
+        print(line)
 
     cfg = RunConfig(
         goal=args.goal,
@@ -85,22 +108,26 @@ def main(argv: list[str] | None = None) -> None:
         image=args.image,
         app=args.app,
         url=args.url,
+        clipboard=args.share_clipboard or settings.share_clipboard,
     )
 
-    def ctx_factory(typesafe, history):
-        return Context(
-            goal=args.goal,
-            browser=config.browser(),
-            email=config.email(),
-            typesafe=typesafe,
-            writer=writer,
-            history=history,
-            ask=ask_user if sys.stdin.isatty() else None,
-        )
-
-    state = run(cfg, ctx_factory)
+    ctx_factory = session.context_factory(settings, args.goal, services, ask_user if sys.stdin.isatty() else None)
+    state = run(cfg, ctx_factory, services.classifier)
     if state.outcome.startswith("aborted"):
         sys.exit(130)
+
+
+def gui(argv: list[str] | None = None) -> None:
+    """Open the window, macOS only. A run from it is the same loop `clicker` drives."""
+    parser = argparse.ArgumentParser(prog="clicker-gui", description="The window for typesafe-computer-use (macOS).")
+    parser.add_argument("goal", nargs="?", default="", help="pre-fill the goal box")
+    args = parser.parse_args(argv)
+    if sys.platform != "darwin":
+        sys.exit("clicker-gui is a macOS window; on this system, use clicker")
+    config.load_dotenv(DOTENV)
+    from .gui.app import launch
+
+    launch(args.goal)
 
 
 def inspect(argv: list[str] | None = None) -> None:
@@ -114,6 +141,7 @@ def inspect(argv: list[str] | None = None) -> None:
     parser.add_argument("--out", type=Path, default=Path("inspections") / time.strftime("%Y%m%d-%H%M%S"))
     args = parser.parse_args(argv)
     config.load_dotenv(DOTENV)
+    settings = load_settings()
     args.out.mkdir(parents=True, exist_ok=True)
 
     for n in range(args.countdown, 0, -1):
@@ -121,7 +149,7 @@ def inspect(argv: list[str] | None = None) -> None:
         time.sleep(1)
     print("capture")
 
-    browser = config.browser()
+    browser = settings.resolved_browser()
     timing: dict[str, float] = {}
     screen = capture(browser=browser, timing=timing)
     items = perceive(screen, config.MAX_OPTIONS, args.goal, timing)
@@ -129,7 +157,10 @@ def inspect(argv: list[str] | None = None) -> None:
     text = args.out / "state.txt"
     screen.image.save(args.out / "raw.png")
     annotate(screen, items, chosen="", out=annotated)
-    text.write_text(render_payload(args.goal, screen, items, [], browser, config.email()), encoding="utf-8")
+    text.write_text(
+        render_payload(args.goal, screen, items, [], browser, settings.resolved_email(), apps=desktop.installed_apps()),
+        encoding="utf-8",
+    )
 
     print(
         f"app={screen.app!r} url={screen.url!r} items={len(items)} ax={ax_count(items)} "

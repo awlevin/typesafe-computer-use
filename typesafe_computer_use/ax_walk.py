@@ -55,6 +55,7 @@ AX_SKIP_SUBTREE_ROLES = {"AXMenu"}  # a closed menu: thousands of zero-sized ite
 AX_NODE_CAP = 4000
 AX_TIME_CAP = 0.6
 AX_OFFSCREEN_CAP = 120  # off-screen controls collected before the walk stops looking for more
+AX_NAMELESS_CAP = 24  # unlabelled icons kept for a model with eyes to name: a toolbar's worth
 AX_MIN_SIDE_PT = 4.0  # anything thinner is a Chromium sliver for a scrolled-out node
 AX_FANOUT = 8  # children scanned per level when recovering a label
 
@@ -142,6 +143,8 @@ def walk_actionable(
     time_cap: float = AX_TIME_CAP,
     offscreen_cap: int = AX_OFFSCREEN_CAP,
     clock: Callable[[], float] = time.monotonic,
+    nameless: list[AxNode] | None = None,
+    nameless_cap: int = AX_NAMELESS_CAP,
 ) -> tuple[list[AxNode], list[AxNode], bool]:
     """Breadth-first hunt for labelled controls: the on-screen ones, the reachable off-screen ones,
     and whether a cap cut the walk short.
@@ -154,6 +157,10 @@ def walk_actionable(
     not offered as one: its subtree stays pruned from `found`. But AXPress does not need a node to
     be visible, so a labelled one that accepts the action is collected separately, down to
     `offscreen_cap`, after which those subtrees are dropped again and the walk is the old one.
+
+    Pass a list as `nameless` to also collect, up to `nameless_cap`, the visible pressable controls
+    that have no label of any kind: icons OCR cannot read and nothing here can name. Nothing else
+    about the walk changes, so a caller that does not ask pays nothing for it.
     """
     found: list[AxNode] = []
     offscreen: list[AxNode] = []
@@ -194,6 +201,10 @@ def walk_actionable(
         # A click lands on the centre, so a node centred off the display is no item, though it
         # crosses the display. It stays reachable by AXPress, and its children are judged as their own.
         visible = not hidden and clickable(frame) and center_on_display(frame, display_w_pt, display_h_pt)
+        unnamed = nameless is not None and not label and visible and role in AX_ACTIONABLE_ROLES
+        if unnamed and len(nameless) < nameless_cap and AX_PRESS in actions(node):
+            x, y, w, h = frame
+            nameless.append(AxNode(role=role, label="", x=x, y=y, w=w, h=h, pressable=True, ref=node))
         if label and not duplicate and not nameless_group:
             if visible:
                 pressable = AX_PRESS in actions(node)

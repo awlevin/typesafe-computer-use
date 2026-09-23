@@ -272,3 +272,13 @@ def test_resolve_text_without_a_writer_types_nothing():
     """Free text only comes from the writer: there is no fallback that reads it out of the goal."""
     text, source = resolve_text(None, "search for 'invoice automation'", make_page(), make_page().items[0], [])
     assert text == "" and source == "no_writer"
+
+
+@pytest.mark.parametrize("label", ["Shipping address", "Typing speed", "Your opinion", "Spinach order", "Topping"])
+def test_a_short_hint_inside_an_ordinary_word_is_not_a_credential(label):
+    assert not looks_credential(label)
+
+
+@pytest.mark.parametrize("label", ["Enter PIN:", "2FA code", "OTP", "new-password", "NewPassword", "CVC/CVV"])
+def test_a_short_hint_as_a_word_and_a_long_one_anywhere_still_are(label):
+    assert looks_credential(label)

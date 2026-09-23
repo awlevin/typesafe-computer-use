@@ -78,3 +78,7 @@ class MeteredWriter:
     def _create(self, **request):
         with self._calls.record(WRITER):
             return self._client.messages.create(**request)
+
+    def __getattr__(self, name: str):
+        """What the writer says of itself (its model, whether it reads images) reads through the meter."""
+        return getattr(self._client, name)

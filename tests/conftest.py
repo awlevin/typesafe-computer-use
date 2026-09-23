@@ -45,6 +45,7 @@ def _stub(name: str) -> types.ModuleType:
 
 
 REAL_ACCESSIBILITY = not _absent("ApplicationServices")
+REAL_APPKIT = not _absent("AppKit")  # the macOS window can only be imported, and guarded, where AppKit is
 
 if _absent("Quartz"):
     _stub("Quartz").kCGHIDEventTap = 0
@@ -60,7 +61,7 @@ if _absent("ocrmac"):
     _package.__path__ = []
     _package.ocrmac = _stub("ocrmac.ocrmac")
     _package.ocrmac.OCR = _OCR
-for _windows_module in ("psutil", "uiautomation", "win32api", "win32con", "win32gui", "win32process", "winocr"):
+for _windows_module in ("psutil", "uiautomation", "win32api", "win32clipboard", "win32con", "win32gui", "win32process", "winocr"):
     if _absent(_windows_module):
         _stub(_windows_module)
 
@@ -78,9 +79,10 @@ def no_real_machine(monkeypatch):
 
     The suite runs on the developer's own Mac, often while they use it. Every call that would
     move the pointer, press a key, run AppleScript (which opens apps and URLs), capture the
-    screen, open a file, or act on another app's accessibility element refuses here, so a test
-    that forgot to patch one fails instead of taking over the machine. A test that needs one
-    patches it itself, after this. The pointer reads as mid-screen, never the abort corner.
+    screen, open a file, launch or raise an app or window, read the clipboard, or act on another
+    app's accessibility element refuses here, so a test that forgot to patch one fails instead of
+    taking over the machine. A test that needs one patches it itself, after this. The pointer
+    reads as mid-screen, never the abort corner.
     """
 
     def refuse(what: str):
@@ -89,7 +91,9 @@ def no_real_machine(monkeypatch):
 
         return call
 
-    for name in ("_post", "osascript", "screenshot", "open_path"):
+    # `_launch` is `open -a`, which launches and raises apps and opens URLs; `_pasteboard` is the
+    # clipboard, whatever the user last copied.
+    for name in ("_post", "osascript", "screenshot", "open_path", "_launch", "_pasteboard"):
         monkeypatch.setattr(macos, name, refuse(f"macos.{name}"))
     monkeypatch.setattr(macos, "mouse_location", lambda: (500.0, 500.0))
     if REAL_ACCESSIBILITY:
@@ -97,9 +101,30 @@ def no_real_machine(monkeypatch):
             monkeypatch.setattr(macos.AS, name, refuse(f"ApplicationServices.{name}"))
     # The Windows adapter: SendInput and the cursor carry all input; the rest launch, activate,
     # open, capture, or act on another app's element.
-    for name in ("_send", "_move", "screenshot", "activate", "open_url", "open_path", "ax_press", "ax_focus", "ax_set_value"):
+    windows_calls = ("_send", "_move", "screenshot", "activate", "open_url", "open_path", "ax_press", "ax_focus", "ax_set_value")
+    for name in (*windows_calls, "raise_window", "clipboard_text"):
         monkeypatch.setattr(windows, name, refuse(f"windows.{name}"))
     monkeypatch.setattr(windows, "mouse_location", lambda: (500.0, 500.0))
+
+    # The window, where AppKit exists: the microphone and its permission prompt, the global key
+    # monitor (it sees keystrokes typed into other apps), system sounds, any window put on the
+    # screen or modal alert, and hiding or raising the app, each of which takes the screen from
+    # whoever is using it.
+    if REAL_APPKIT:
+        from typesafe_computer_use.gui import app as gui_app
+        from typesafe_computer_use.gui import audio, hotkey, sounds, widgets
+
+        for module, name in (
+            (audio, "_open_recorder"),
+            (audio, "request_permission"),
+            (hotkey, "_add_monitors"),
+            (sounds, "_play"),
+            (widgets, "present"),
+            (widgets, "alert"),
+            (widgets, "confirm"),
+            (gui_app, "_app_visibility"),
+        ):
+            monkeypatch.setattr(module, name, refuse(f"{module.__name__.rpartition('.')[2]}.{name}"))
 
     # The browser backend: no Chrome and no process of any kind, nothing over CDP, and no
     # connection except to a server on this machine that the test started itself.
@@ -196,17 +221,35 @@ def endpoint():
     """A writer endpoint on localhost, as a proxy or a local model would serve one.
 
     It answers the Anthropic Messages API or OpenAI's Chat Completions API by path, records each
-    request with its headers, and replies with `state["reply"]`. `state["reject"]` may return an
-    error message for a request body, which then gets a 400, the way an endpoint refuses a parameter.
+    request with its headers, and replies with `state["reply"]`, or with `state["reply"](body)` when
+    that is a callable. `state["reject"]` may return an error message for a request body, which then
+    gets a 400, the way an endpoint refuses a parameter. A GET of `/models` lists `state["models"]`.
     """
     seen: list[dict] = []
-    state: dict = {"reply": '{"ok": true, "url": "https://example.com", "reason": ""}', "reject": lambda body: None}
+    state: dict = {
+        "reply": '{"ok": true, "url": "https://example.com", "reason": ""}',
+        "reject": lambda body: None,
+        "models": ["model-a"],
+    }
 
     class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": None})
+            listing = [
+                {"id": name, "object": "model", "type": "model", "created": 0, "owned_by": "test"} for name in state["models"]
+            ]
+            data = json.dumps({"object": "list", "data": listing, "has_more": False}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             seen.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
             refusal = state["reject"](body)
+            reply = state["reply"](body) if callable(state["reply"]) else state["reply"]
             if refusal:
                 status, out = 400, {"type": "error", "error": {"type": "invalid_request_error", "message": refusal}}
             elif self.path.endswith("/chat/completions"):
@@ -217,9 +260,7 @@ def endpoint():
                         "object": "chat.completion",
                         "created": 0,
                         "model": body["model"],
-                        "choices": [
-                            {"index": 0, "message": {"role": "assistant", "content": state["reply"]}, "finish_reason": "stop"}
-                        ],
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
                     },
                 )
             else:
@@ -230,7 +271,7 @@ def endpoint():
                         "type": "message",
                         "role": "assistant",
                         "model": body["model"],
-                        "content": [{"type": "text", "text": state["reply"]}],
+                        "content": [{"type": "text", "text": reply}],
                         "stop_reason": "end_turn",
                         "stop_sequence": None,
                         "usage": {"input_tokens": 1, "output_tokens": 1},

@@ -161,6 +161,28 @@ class AxNode:
 
 
 @dataclass(frozen=True)
+class MenuItem:
+    """One enabled command in the frontmost app's menu bar, named by the path a person would read out.
+
+    `chord` is the keyboard shortcut the menu shows for it, as (key, command, shift), or None when
+    it has none; it is how a command that a named key already runs is told apart.
+    """
+
+    path: str
+    chord: tuple[str, bool, bool] | None = None
+    ref: object | None = field(default=None, compare=False, repr=False)
+
+
+@dataclass(frozen=True)
+class WindowRef:
+    """One titled window of the frontmost app. `main` is the one the app treats as its front."""
+
+    title: str
+    main: bool = False
+    ref: object | None = field(default=None, compare=False, repr=False)
+
+
+@dataclass(frozen=True)
 class Field:
     """The focused accessibility element, in screen points.
 
@@ -176,6 +198,7 @@ class Field:
     w: float
     h: float
     ref: object | None = field(default=None, compare=False, repr=False)
+    secure: bool = False  # the platform says it hides what is typed: a password field, whatever its label
 
     @property
     def is_text(self) -> bool:
@@ -190,7 +213,8 @@ class Field:
             "role": self.role,
             "label": self.label,
             "placeholder": self.placeholder,
-            "current_value": self.value[:200],
+            "current_value": "" if self.secure else self.value[:200],
+            **({"secure": True} if self.secure else {}),
         }
 
 
@@ -207,6 +231,11 @@ class Screen:
     window: tuple[float, float, float, float] | None = None  # frontmost window, x/y/w/h in points; None in replay
     ax_refs: dict[int, object] = field(default_factory=dict)  # item index -> accessibility element, when it has one
     offscreen: list[AxNode] = field(default_factory=list)  # labelled controls the app exposes but does not show
+    origin: tuple[float, float] = (0.0, 0.0)  # the captured display's top-left, in global points
+    menu: list[MenuItem] = field(default_factory=list)  # the frontmost app's menu bar commands
+    windows: list[WindowRef] = field(default_factory=list)  # that app's titled windows, front first
+    running: frozenset[str] = frozenset()  # the apps open right now, by the name the user sees
+    clipboard: str = ""  # the clipboard's text, only when the user chose to share it with the classifier
 
     @property
     def size_pt(self) -> tuple[float, float]:
@@ -224,5 +253,15 @@ class Screen:
         return f"{row}-{col}"
 
     def to_points(self, item: Item) -> tuple[float, float]:
+        """Where to click for an item: capture pixels back into the global points the pointer uses."""
         cx, cy = item.center
-        return cx / self.scale, cy / self.scale
+        return self.origin[0] + cx / self.scale, self.origin[1] + cy / self.scale
+
+    def to_pixels(self, x: float, y: float) -> tuple[float, float]:
+        """The other way: a point on the desktop as a pixel of this capture.
+
+        The accessibility tree reports global points, which run across every display; the capture is
+        of one display. The origin relates the two, and is (0, 0) with one screen, where this is the
+        plain scale it always was.
+        """
+        return (x - self.origin[0]) * self.scale, (y - self.origin[1]) * self.scale

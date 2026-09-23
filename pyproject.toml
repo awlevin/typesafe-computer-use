@@ -28,11 +28,20 @@ dependencies = [
     "websocket-client==1.9.0",
     "ocrmac==1.0.1; sys_platform == 'darwin'",
     "pyobjc-framework-ApplicationServices==12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-AVFoundation==12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz==12.2.2; sys_platform == 'darwin'",
     "psutil==7.2.2; sys_platform == 'win32'",
     "pywin32==312; sys_platform == 'win32'",
     "uiautomation==2.0.29; sys_platform == 'win32'",
     "winocr==0.0.15; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+# Local dictation for the macOS window: MLX Whisper, on Apple Silicon only, and heavy, so opt-in.
+voice = [
+    "mlx-whisper==0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "numpy==2.5.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [project.urls]
@@ -42,10 +51,11 @@ Issues = "https://github.com/awlevin/typesafe-computer-use/issues"
 [project.scripts]
 clicker = "typesafe_computer_use.cli:main"
 clicker-inspect = "typesafe_computer_use.cli:inspect"
+clicker-gui = "typesafe_computer_use.cli:gui"
 clicker-bench = "typesafe_computer_use.browser.bench:main"
 
 [dependency-groups]
-dev = ["pytest==9.1.1", "ruff==0.16.8"]
+dev = ["numpy==2.5.3", "pytest==9.1.1", "ruff==0.16.8"]  # numpy: the voice extra's WAV reading, tested without MLX
 
 [build-system]
 requires = ["hatchling==1.32.1"]

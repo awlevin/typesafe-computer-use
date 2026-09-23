@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
@@ -13,6 +15,7 @@ from .actions import Context, perform
 from .calls import Calls, MeteredClassifier, MeteredWriter
 from .config import DEFAULT_DELAY, DEFAULT_HANDOFFS, DEFAULT_MIN_CONFIDENCE, DEFAULT_STEPS, MAX_OPTIONS
 from .decide import Decision, decide, offscreen_records
+from .goal import LiveGoal
 from .models import Abort, Guidance, Item, Screen, Signature, same_screen, signature
 from .perception import OcrCache, capture, perceive
 from .platform_adapter import desktop
@@ -26,6 +29,8 @@ MAX_IDLE = 3  # consecutive actions that left the screen as it was: refusals, wa
 MAX_REPEATS = 2  # consecutive actions already taken on the same screen earlier in the run: a cycle, or a click that does nothing
 EARLIER_LINES = 600  # lines of text from the screens before the last one that the answer may also be read from
 MAX_QUESTIONS = 3  # questions the writer may put to the user in one run; an empty reply ends the asking sooner
+HOLD_SECONDS = 1.5  # how long a step waits for more of a goal that is still being spoken
+STOP_POLL_SECONDS = 0.25  # how often a wait looks at a caller's Stop
 
 # The outcomes the writer is handed, each in words it can pass on. A dry run took no action and
 # an abort is the user's own stop, so neither has anything to report.
@@ -50,6 +55,7 @@ class RunConfig:
     image: Path | None = None  # replay a saved capture (never acts)
     app: str | None = None  # frontmost app to report during replay
     url: str | None = None  # browser URL to report during replay
+    clipboard: bool = False  # show the classifier the clipboard's text each step: off unless the user chose it
 
     @property
     def replay(self) -> bool:
@@ -64,6 +70,41 @@ class Handoff:
     outcome: str  # why the classifier stopped
     focus: str  # what the writer sent it back to do
     actions: int  # how many actions the run had taken by then, so a focus that led to none can be told
+
+
+@dataclass(frozen=True)
+class StepEvent:
+    """One finished step, for whatever follows the run: a window renders these, the terminal needs none."""
+
+    step: int
+    app: str
+    url: str | None
+    kind: str
+    confidence: float
+    chosen: str
+    item_text: str | None
+    did: str | None  # what the action did, or None for a step that took none
+    annotated: Path
+    seconds: float
+
+
+@dataclass
+class RunHooks:
+    """How a caller follows and interrupts a run without the runner knowing who is calling.
+
+    `should_stop` is polled at every step and through every wait, so a Stop button takes effect in
+    a fraction of a second rather than at the end of the settle delay. A stop is an abort.
+    """
+
+    log: Callable[[str], None] | None = None
+    on_step: Callable[[StepEvent], None] | None = None
+    on_answer: Callable[[Answer], None] | None = None
+    should_stop: Callable[[], bool] | None = None
+    quiet: bool = False  # print nothing to the terminal
+
+    def check(self) -> None:
+        if self.should_stop is not None and self.should_stop():
+            raise Abort("stopped")
 
 
 @dataclass
@@ -83,27 +124,51 @@ class RunState:
     guidance: Guidance = field(default_factory=Guidance)  # the writer's focus and the user's replies, as they stand
     handoffs: list[Handoff] = field(default_factory=list)
     calls: Calls = field(default_factory=Calls)  # requests to each model, over the whole run
+    live: LiveGoal | None = None  # a goal still being spoken while the loop works on it
+    holding: bool = False  # this step waited for more of the goal instead of acting or stopping
+    holds: int = 0  # steps that waited for more of the goal; each still wrote its own files
+    hooks: RunHooks = field(default_factory=RunHooks)
+
+    def goal(self, cfg: RunConfig) -> str:
+        """The goal as it reads now: one being dictated grows while the loop already works on it."""
+        return self.live.text if self.live is not None else cfg.goal
+
+    @property
+    def listening(self) -> bool:
+        return self.live is not None and self.live.listening
 
 
-def run(cfg: RunConfig, ctx_factory) -> RunState:
-    """Drive the loop. ctx_factory(typesafe, history) builds the action Context."""
+def run(cfg: RunConfig, ctx_factory, classifier=None, hooks: RunHooks | None = None, live: LiveGoal | None = None) -> RunState:
+    """Drive the loop. ctx_factory(typesafe, history) builds the action Context.
+
+    `classifier` opens the classifier for this run, as a context manager; TypeSafe's own client,
+    reading TYPESAFE_API_KEY, when it is not given. `hooks` let a caller follow the run and stop it.
+    `live` is a goal still being dictated: the loop reads it afresh every step and, while the user
+    is still talking, holds rather than concluding that half a sentence is done or hopeless.
+    """
+    hooks = hooks or RunHooks()
     cfg.out.mkdir(parents=True, exist_ok=True)
-    log = Log(cfg.out / "run.log")
+    log = Log(cfg.out / "run.log", sink=hooks.log, quiet=hooks.quiet)
     log(f"run folder: {cfg.out}")
     if cfg.act:
         log("driving the machine. abort: Ctrl-C, or slam the mouse into the top-left corner.")
 
-    state = RunState()
+    state = RunState(live=live, hooks=hooks)
     started = time.time()
     try:
-        with TypeSafeClient() as typesafe:
+        with (classifier or TypeSafeClient)() as typesafe:
             ctx = metered(ctx_factory(typesafe, state.history), state.calls)
-            for step in range(1, cfg.steps + 1):
-                if run_step(cfg, ctx, state, step, log):
-                    continue
-                if not hand_off(cfg, ctx, state, step, log):
-                    break
-                ctx = replace(ctx, guidance=state.guidance)
+            step = 1
+            while step <= cfg.steps:
+                state.holding = False
+                keep_going = run_step(cfg, ctx, state, step, log)
+                if state.holding:
+                    continue  # waiting for the rest of a sentence is not a step
+                if not keep_going:
+                    if not hand_off(cfg, ctx, state, step, log):
+                        break
+                    ctx = replace(ctx, guidance=state.guidance)
+                step += 1
             else:
                 log(f"\nstopped after {cfg.steps} steps")
                 state.outcome = "step limit"
@@ -112,8 +177,10 @@ def run(cfg: RunConfig, ctx_factory) -> RunState:
         state.outcome = f"aborted ({e or 'Ctrl-C'})"
         log(f"\n{state.outcome} after {len(state.history)} actions")
     finally:
+        if state.answer is not None and hooks.on_answer is not None:
+            hooks.on_answer(state.answer)
         summary = {
-            "goal": cfg.goal,
+            "goal": state.goal(cfg),
             "act": cfg.act,
             "steps_taken": len(state.history),
             "outcome": state.outcome,
@@ -139,6 +206,7 @@ def metered(ctx: Context, calls: Calls) -> Context:
         ctx,
         typesafe=MeteredClassifier(ctx.typesafe, calls),
         writer=MeteredWriter(ctx.writer, calls) if ctx.writer is not None else None,
+        answerer=MeteredWriter(ctx.answerer, calls) if ctx.answerer is not None else None,
     )
 
 
@@ -157,8 +225,8 @@ def hand_off(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     stopped = STOPPED.get(state.outcome)
     if stopped is None:
         return False
-    if ctx.writer is None:
-        log("\nno answer: the writer is disabled (set ANTHROPIC_API_KEY or CLICKER_WRITER_BASE_URL)")
+    if (ctx.answerer or ctx.writer) is None:
+        log("\nno answer: the writer is disabled (set ANTHROPIC_API_KEY or CLICKER_WRITER_BASE_URL, or choose one in the app)")
         return False
     if state.handoffs and state.handoffs[-1].actions == len(state.history) and state.answer is not None:
         log(f"\nanswer ({verdict(state.answer)}; the focus led to no action, so the last answer stands):\n  {state.answer.text}")
@@ -217,16 +285,26 @@ def review(cfg: RunConfig, ctx: Context, state: RunState, stopped: str, can_ask:
     The last step's capture serves when nothing acted after it. An action makes it stale, so the
     screen is captured again, and saved so the answer can be checked against what it was read from.
     """
+    goal = state.goal(cfg)
     if state.view is None:
         desktop.check_abort()
         screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser)
         screen.image.save(cfg.out / "answer-raw.png")
-        state.view = (screen, perceive(screen, MAX_OPTIONS, cfg.goal))
+        state.view = (screen, perceive(screen, MAX_OPTIONS, goal))
     screen, items = state.view
     earlier = earlier_screens(state, signature(screen, items))
     earlier_stops = [{"after_action": h.actions, "why": STOPPED[h.outcome], "focus_given": h.focus} for h in state.handoffs]
     return compose_answer(
-        ctx.writer, cfg.goal, screen, items, state.history, stopped, earlier, state.guidance, earlier_stops, can_ask
+        ctx.answerer or ctx.writer,
+        goal,
+        screen,
+        items,
+        state.history,
+        stopped,
+        earlier,
+        state.guidance,
+        earlier_stops,
+        can_ask,
     )
 
 
@@ -250,25 +328,76 @@ def earlier_screens(state: RunState, final: Signature, budget: int = EARLIER_LIN
     return [{"app": app, "url": url, "text": [text for text, _ in lines]} for app, url, _, lines in reversed(out)]
 
 
+def icon_namer(ctx: Context):
+    """The labeller bound to the metered writer that reads images, so each naming is counted as the writer's."""
+    reader = ctx.answerer or ctx.writer
+    if ctx.labeller is None or reader is None:
+        return None
+    return lambda screen, nodes: ctx.labeller(reader, screen, nodes)
+
+
+def settle(seconds: float, hooks: RunHooks) -> None:
+    """Wait, watching the abort corner, and a caller's Stop too when there is one to watch."""
+    if hooks.should_stop is None:
+        desktop.sleep_watching(seconds)
+        return
+    for _ in range(math.ceil(seconds / STOP_POLL_SECONDS)):
+        hooks.check()
+        desktop.sleep_watching(min(STOP_POLL_SECONDS, seconds))
+
+
 def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log) -> bool:
     desktop.check_abort()
+    state.hooks.check()
     timing: dict[str, float] = {}
     started = time.perf_counter()
     with phase(timing, "capture"):
-        screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser, timing)
-    items = perceive(screen, MAX_OPTIONS, cfg.goal, timing, None if cfg.replay else state.ocr_cache)
+        screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser, timing, cfg.clipboard)
+    # A dictated goal is longer now than when the run began, and may have grown during the capture.
+    goal = state.goal(cfg)
+    if ctx.goal != goal:
+        ctx = replace(ctx, goal=goal)  # so the writer types, and the check judges, by the goal as it now reads
+    items = perceive(screen, MAX_OPTIONS, goal, timing, None if cfg.replay else state.ocr_cache, icon_namer(ctx))
     state.view = (screen, items)
     if not screen_moved(state, screen, items, log):
         return False
     tried = tried_here(state)
-    prefix = cfg.out / f"step-{step:03d}"  # three digits, so a run of 100 steps still lists in order
+    # Three digits, so a run of 100 steps still lists in order. A hold is no step but wrote files of
+    # its own, so the steps after it are numbered past them.
+    prefix = cfg.out / f"step-{step + state.holds:03d}"
     screen.image.save(prefix.with_name(prefix.name + "-raw.png"))
     prefix.with_name(prefix.name + "-payload.txt").write_text(
-        render_payload(cfg.goal, screen, items, state.history, ctx.browser, ctx.email, tried, ctx.guidance), encoding="utf-8"
+        render_payload(
+            goal,
+            screen,
+            items,
+            state.history,
+            ctx.browser,
+            ctx.email,
+            tried,
+            ctx.guidance,
+            ctx.apps,
+            cfg.clipboard,
+            state.listening,
+        ),
+        encoding="utf-8",
     )
 
     with phase(timing, "decide"):
-        decision = decide(ctx.typesafe, cfg.goal, screen, items, state.history, ctx.browser, ctx.email, tried, ctx.guidance)
+        decision = decide(
+            ctx.typesafe,
+            goal,
+            screen,
+            items,
+            state.history,
+            ctx.browser,
+            ctx.email,
+            tried,
+            ctx.guidance,
+            ctx.apps,
+            cfg.clipboard,
+            state.listening,
+        )
     by_index = {str(it.index): it for it in items}
     annotate(screen, items, decision.chosen, prefix.with_suffix(".png"))
 
@@ -288,11 +417,33 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
         log(f"  offscreen ({decision.offscreen.confidence:.2f}):")
         for key, p in top(decision.offscreen, 3):
             log(f"  {p:5.2f}  [{key}] {screen.offscreen[int(key)].label!r}")
+    target = decision.app if decision.kind.choice == "open_app" else decision.target
+    if target is not None:  # every step answers the key question; only the one the kind uses is worth printing
+        log(f"  {decision.kind.choice} ({target.confidence:.2f}):")
+        for key, p in top(target, 3):
+            log(f"  {p:5.2f}  {describe_target(decision.kind.choice, key, screen)}")
 
+    before = len(state.history)
     keep_going = resolve(cfg, ctx, state, screen, items, decision, timing, log)
     timing.setdefault("act", 0.0)
     timing["total"] = round(time.perf_counter() - started, 3)
     state.timings.append(timing)
+    if state.hooks.on_step is not None:
+        item = by_index.get(decision.item_key) if decision.item_key is not None else None
+        state.hooks.on_step(
+            StepEvent(
+                step=step,
+                app=screen.app,
+                url=screen.url,
+                kind=decision.kind.choice,
+                confidence=decision.confidence,
+                chosen=decision.chosen,
+                item_text=item.text if item else None,
+                did=state.history[-1] if len(state.history) > before else None,
+                annotated=prefix.with_suffix(".png"),
+                seconds=timing["total"],
+            )
+        )
 
     prefix.with_name(prefix.name + "-answers.json").write_text(
         json.dumps(answers(decision, screen, items, timing, tried, state), indent=2), encoding="utf-8"
@@ -301,7 +452,7 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     log(format_timing(timing))
 
     if state.view is None:  # an action ran: let the screen settle before the next step, or the answer, reads it
-        desktop.sleep_watching(cfg.delay)
+        settle(cfg.delay, state.hooks)
     return keep_going
 
 
@@ -316,6 +467,17 @@ def resolve(
     log: Log,
 ) -> bool:
     """Apply the stop rules, then the action. True to keep looping."""
+    if state.listening and (decision.stops or decision.confidence < cfg.min_confidence):
+        # The goal is half spoken. Everything asked so far may be done, or nothing may fit it yet;
+        # the sentence is not finished, so neither is the run. The screen was not acted on, so the
+        # wait is not an idle action either: the next capture is compared with nothing.
+        why = f"model says {decision.kind.choice!r}" if decision.stops else f"confidence {decision.confidence:.2f}"
+        log(f"  {why}, but the goal is still being spoken; waiting for the rest")
+        state.holding = True
+        state.holds += 1
+        state.last = None
+        settle(HOLD_SECONDS, state.hooks)
+        return True
     if decision.stops:
         log(f"  model says {decision.kind.choice!r}; stopping")
         state.outcome = "done" if decision.kind.choice == "done" else "nothing helps"
@@ -381,6 +543,12 @@ def repeating(state: RunState, what: str, waiting: bool, log: Log) -> bool:
     return False
 
 
+def describe_target(kind: str, key: str, screen: Screen) -> str:
+    """A target answer's key in words: a menu path or a window title for their positions, a name as it is."""
+    listed = {"press_menu": [m.path for m in screen.menu], "focus_window": [w.title for w in screen.windows]}.get(kind)
+    return repr(listed[int(key)]) if listed is not None and key.isdigit() and int(key) < len(listed) else key
+
+
 def answers(
     decision: Decision, screen: Screen, items: list[Item], timing: dict[str, float], tried: list[str], state: RunState
 ) -> dict:
@@ -397,6 +565,13 @@ def answers(
         "offscreen": decision.offscreen.choice if decision.offscreen else None,
         "offscreen_probabilities": decision.offscreen.probabilities if decision.offscreen else None,
         "offscreen_controls": offscreen_records(screen.offscreen),
+        "open_app": decision.app.choice if decision.app else None,  # "app" below is the frontmost one
+        "open_app_probabilities": decision.app.probabilities if decision.app else None,
+        "key": decision.key.choice if decision.key else None,
+        "key_probabilities": decision.key.probabilities if decision.key else None,
+        "menu": describe_target("press_menu", decision.menu.choice, screen) if decision.menu else None,
+        "window": describe_target("focus_window", decision.window.choice, screen) if decision.window else None,
+        "menu_commands": [item.path for item in screen.menu],
         "chosen": decision.chosen,
         "confidence": decision.confidence,
         "already_tried_on_this_screen": tried,

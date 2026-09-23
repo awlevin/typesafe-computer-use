@@ -24,7 +24,9 @@ from typesafe_sdk import Noul
 
 from typesafe_computer_use import actions, runner
 from typesafe_computer_use.actions import Context
-from typesafe_computer_use.models import AxNode, Field, Item, Screen
+from typesafe_computer_use.decide import CLICK_KINDS
+from typesafe_computer_use.goal import LiveGoal
+from typesafe_computer_use.models import AxNode, Field, Item, MenuItem, Screen, WindowRef
 from typesafe_computer_use.platform_adapter import desktop
 from typesafe_computer_use.runner import RunConfig, RunState, run
 
@@ -101,7 +103,9 @@ class Page:
     appears more than once on the page cannot name one item, so those clicks are keyed by row
     instead: "click:Buy@1" is the Buy of the second row. An action
     with no entry leaves the page alone, which is the "nothing happened" case the runner must cope
-    with.
+    with. The other gestures read the same way: "double-click:Report.pdf", "right-click:Report.pdf",
+    "cmd+s" for a chord, "menu:<path>", "window:<title>", and "activate:<app>" for an app brought up
+    by name.
     """
 
     name: str
@@ -113,6 +117,9 @@ class Page:
     loads_in: int = 0  # steps of "wait" before the items appear
     no_ax_value: bool = False  # the field refuses to have its value set, so text has to be typed in
     covered_by: str | None = None  # an overlay eating every mouse click: the text of what is really hit
+    menu: tuple = ()  # the app's menu bar: paths, or (path, chord) for a command with a shortcut
+    windows: tuple[str, ...] = ()  # the app's titled windows, the one in front first
+    secure: bool = False  # the focused field hides what is typed, as a password field does
     on: dict[str, str | Callable[[World], str | None]] = dataclasses.field(default_factory=dict)
 
 
@@ -131,6 +138,10 @@ class World:
         self.pages = {p.name: p for p in pages}
         self.page = self.pages[start or pages[0].name]
         self.typed: dict[str, str] = {}
+        self.running: set[str] = set()  # the apps open, as the adapter's running_apps reports them
+        # Called before each capture with the world, the way speech lands between two steps of a
+        # dictated run: a scenario grows or finishes a LiveGoal here, keyed off `ticks`.
+        self.between: Callable[[World], None] | None = None
         self.log: list[str] = []
         self.mouse: list[tuple[float, float]] = []
         self.fake: FakeTypeSafe | None = None  # the classifier `drive` built, for fake.states
@@ -205,9 +216,18 @@ class World:
         Each capture is a tick, so a page whose rows are a callable can move between steps without
         moving inside one: every other read of the screen in the same step sees the same rows.
         """
+        if self.between is not None:
+            self.between(self)
         nodes = [
             AxNode(role="AXLink", label=lbl, x=0.0, y=OFFSCREEN_Y, w=120.0, h=32.0, pressable=True, ref=self._ref(f"press:{lbl}"))
             for lbl in self.page.offscreen
+        ]
+        menu = []
+        for entry in self.page.menu:
+            path, chord = (entry, None) if isinstance(entry, str) else entry
+            menu.append(MenuItem(path=path, chord=chord, ref=self._ref(f"menu:{path}")))
+        windows = [
+            WindowRef(title=title, main=i == 0, ref=self._ref(f"window:{title}")) for i, title in enumerate(self.page.windows)
         ]
         screen = Screen(
             image=Image.new("RGB", CAPTURE),
@@ -218,6 +238,9 @@ class World:
             pid=1,
             window=None,
             offscreen=nodes,
+            menu=menu,
+            windows=windows,
+            running=frozenset(self.running),
         )
         self.ticks += 1
         return screen
@@ -256,25 +279,28 @@ class World:
             w=(x2 - x1) / SCALE,
             h=ROW_TEXT_HEIGHT / SCALE,
             ref=self._field_ref(label),
+            secure=self.page.secure,
         )
 
     # ----- the machine ---------------------------------------------------------------------
 
-    def click_at(self, point: tuple[float, float]) -> None:
+    def click_at(self, point: tuple[float, float], clicks: int = 1, right: bool = False) -> None:
         """A synthetic click, in screen points: find the cell it lands on and press that item.
 
         A page with a `covered_by` overlay takes every mouse click itself, wherever it was aimed:
         that is a cookie banner over the content. A press through accessibility still reaches the
-        element under it, which is the whole point of pressing rather than clicking.
+        element under it, which is the whole point of pressing rather than clicking. A double or a
+        right click reads as the plain click's action with "double-" or "right-" in front.
         """
         self.mouse.append(point)
+        gesture = "right-" if right else "double-" if clicks == 2 else ""
         if self.page.covered_by is not None:
-            self.apply(f"click:{self.page.covered_by}")
+            self.apply(f"{gesture}click:{self.page.covered_by}")
             return
         px, py = point[0] * SCALE, point[1] * SCALE
         cells = self.cells()
         hit = next((c for c in cells if c.box[0] <= px <= c.box[2] and c.box[1] <= py <= c.box[3]), None)
-        self.apply(self.click_action(hit, cells) if hit is not None else "click:nothing")
+        self.apply(gesture + (self.click_action(hit, cells) if hit is not None else "click:nothing"))
 
     def ax_press(self, ref: object) -> bool:
         if not isinstance(ref, Ref) or self._refs.get(ref.name) is not ref:
@@ -282,11 +308,20 @@ class World:
         self.apply(ref.name)
         return True
 
-    def press(self, name: str, command: bool = False) -> None:
+    def press(self, name: str, command: bool = False, shift: bool = False) -> None:
         if command and name == "[":
             self.apply("back")
             return
+        if command or shift:
+            self.apply(f"{'shift+' if shift else ''}{'cmd+' if command else ''}{name}")
+            return
         self.apply("enter" if name == "return" else name)
+
+    def raise_window(self, ref: object) -> bool:
+        if not isinstance(ref, Ref) or self._refs.get(ref.name) is not ref:
+            return False
+        self.apply(ref.name)
+        return True
 
     def scroll(self, lines: int) -> None:
         self.apply("scroll_down" if lines < 0 else "scroll_up")
@@ -309,7 +344,9 @@ class World:
         self.typed.pop(self.page.field or "", None)
 
     def activate(self, app: str) -> bool:
-        self.apply("activate")
+        """Bring an app up. A page that says where that app leads names it; otherwise it is the browser coming forward."""
+        self.apply(f"activate:{app}" if f"activate:{app}" in self.page.on else "activate")
+        self.running.add(app)
         return True
 
     def open_url(self, browser: str, url: str) -> bool:
@@ -336,6 +373,7 @@ class World:
         monkeypatch.setattr(desktop, "focused_field", self.focused_field)
         monkeypatch.setattr(desktop, "activate", self.activate)
         monkeypatch.setattr(desktop, "open_url", self.open_url)
+        monkeypatch.setattr(desktop, "raise_window", self.raise_window)
         # `wait` is the one action that touches no machine call, so the only way the world hears
         # about it is the handler itself. Without this a loading page would never finish loading.
         monkeypatch.setitem(actions._HANDLERS, "wait", lambda decision, screen, items, ctx: (self.apply("wait"), "waited")[1])
@@ -381,11 +419,28 @@ class FakeTypeSafe:
     def _answers(self, state: dict, questions: dict, kind: str, target, confidence: float) -> dict:
         answers = {"kind": _answer(kind, confidence), "site": _answer(target if kind == "use_browser" else "none", confidence)}
         if "item" in questions:
-            answers["item"] = _answer(self._item_key(state, target) if kind == "click_item" else "0", confidence)
+            answers["item"] = _answer(self._item_key(state, target) if kind in CLICK_KINDS else "0", confidence)
         if "offscreen" in questions:
             key = self._offscreen_key(state, target) if kind == "press_offscreen" else "0"
             answers["offscreen"] = _answer(key, confidence)
+        # A key, menu, window or app is named by what it reads as: a key's name, a menu path, a window
+        # title, an app. Whatever the kind does not use gets the first thing on offer.
+        for name, owner in (("key", "press_key"), ("menu", "press_menu"), ("window", "focus_window"), ("app", "open_app")):
+            if name in questions:
+                criteria = questions[name].criteria
+                key = self._target_key(criteria, target) if kind == owner else next(iter(criteria))
+                answers[name] = _answer(key, confidence)
         return answers
+
+    @staticmethod
+    def _target_key(criteria: dict, target: str) -> str:
+        """The key the policy's target stands for: itself, or the key whose criterion reads as it."""
+        if target in criteria:
+            return target
+        for key, text in criteria.items():
+            if text in (target, repr(target)):
+                return key
+        raise AssertionError(f"{target!r} is not on offer: {list(criteria.values())}")
 
     @staticmethod
     def _item_key(state: dict, text: str | int) -> str:
@@ -482,6 +537,8 @@ def drive(
     noul: float = 0.95,
     replies: list[str] | None = None,
     handoffs: int | None = None,
+    apps: tuple[str, ...] = (),
+    live: LiveGoal | None = None,
 ) -> RunState:
     """Run the real loop against the world until it stops itself. `world.fake` holds the classifier.
 
@@ -512,5 +569,7 @@ def drive(
             writer=client,
             history=history,
             ask=ask if replies is not None else None,
+            apps=apps,
         ),
+        live=live,
     )
