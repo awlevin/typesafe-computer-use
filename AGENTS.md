@@ -11,6 +11,9 @@ Without the maintainer's explicit approval for that specific command, run only:
 - `uv sync`, `uv lock`
 - `uv run ruff check .` and `uv run ruff format .`
 - `uv run pytest` (the offline unit tests)
+- `scripts/sandbox` and the `docker`/`docker compose` commands it runs, for the sandbox
+  container only (`compose.yaml`, `sandbox/`). The sandbox is its own computer: it never touches
+  this machine's screen, input, or apps. The run folders it writes land in `./runs`.
 
 Everything else needs a yes first, every time. That includes:
 
@@ -20,7 +23,7 @@ Everything else needs a yes first, every time. That includes:
   or opens a URL or file
 - launching Chrome or any browser, and anything that talks to a browser over CDP
 - screen capture of any kind
-- Docker containers
+- any other Docker container
 - requests to local model servers (Ollama, LM Studio) or any other local service
 
 Propose the exact command and wait. Approval covers that command once, not the kind of command

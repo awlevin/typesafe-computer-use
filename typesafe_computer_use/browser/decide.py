@@ -215,7 +215,7 @@ def verify_typed(
 
 def field_context(page: Page, index: int, *, span: int = 6) -> list[str]:
     """Element text around a field, in reading order. The browser analogue of
-    `perception.near_field`, which the writer packet uses on macOS."""
+    `Screen.near_field`, which the writer packet uses on macOS."""
     try:
         target = next(i for i, e in enumerate(page.items) if e.index == index)
     except StopIteration:

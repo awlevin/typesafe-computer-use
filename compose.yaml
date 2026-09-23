@@ -1,0 +1,26 @@
+# The sandbox computer. Drive it with scripts/sandbox; see "Sandbox" in the README.
+# One name for every checkout and worktree, so there is only ever one sandbox on port 6080.
+name: typesafe-computer-use-sandbox
+services:
+  sandbox:
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile
+    image: typesafe-computer-use-sandbox
+    init: true
+    volumes:
+      - .:/work                      # the source, live: edits apply to the next run
+      - venv:/opt/venv               # the agent's Linux environment, apart from the host's .venv
+      - uv-cache:/home/agent/.cache  # keeps `uv sync` fast across restarts
+    tmpfs:
+      - /tmp                         # browser profiles and scratch files never touch a disk
+    shm_size: 2gb                    # Chromium draws through shared memory
+    env_file:
+      - path: .env                   # TYPESAFE_API_KEY and the writer's keys, if present
+        required: false
+    ports:
+      - "127.0.0.1:6080:6080"        # noVNC, reachable from this machine only
+
+volumes:
+  venv:
+  uv-cache:

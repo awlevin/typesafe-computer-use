@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Drive the sandbox computer: a Linux desktop in a container that the agent can use freely.
+#
+#   scripts/sandbox up            build if needed, start, install the project; prints the watch URL
+#   scripts/sandbox run CMD...    run a project command in the sandbox, e.g. `clicker-bench loop --headed`
+#   scripts/sandbox reset         close every app and clear browser profiles: a clean desktop
+#   scripts/sandbox shell         a shell in the sandbox, as the agent user
+#   scripts/sandbox watch         print the URL that shows the sandbox's screen
+#   scripts/sandbox down          stop and remove the container (the uv cache survives)
+#   scripts/sandbox destroy       down, plus the image and every volume
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+WATCH="http://localhost:6080/vnc.html?autoconnect=1&resize=scale"
+compose=(docker compose)
+
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
+
+case "${1:-}" in
+  up)
+    "${compose[@]}" up --detach --build --wait sandbox
+    "${compose[@]}" exec --user agent sandbox uv sync --frozen --quiet
+    echo "sandbox up. watch it at $WATCH"
+    ;;
+  run)
+    shift
+    [[ $# -gt 0 ]] || { usage; exit 2; }
+    exec "${compose[@]}" exec --user agent sandbox uv run "$@"
+    ;;
+  reset)
+    "${compose[@]}" exec sandbox sandbox-reset
+    ;;
+  shell)
+    exec "${compose[@]}" exec --user agent sandbox bash
+    ;;
+  watch)
+    echo "$WATCH"
+    ;;
+  down)
+    "${compose[@]}" down
+    ;;
+  destroy)
+    "${compose[@]}" down --volumes --rmi local
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

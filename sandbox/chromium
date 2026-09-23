@@ -1,0 +1,8 @@
+#!/bin/sh
+# Chromium as the sandbox runs it. Found on PATH before /usr/bin/chromium, so the project's own
+# launch code (browser/cdp.py) needs no container special case.
+#   --no-sandbox: Docker's default seccomp profile leaves Chromium no usable sandbox of its own;
+#     the container is the boundary here.
+#   --disable-dev-shm-usage: /dev/shm is small in a container.
+#   --start-maximized: a headed window fills the virtual display.
+exec /usr/bin/chromium --no-sandbox --disable-dev-shm-usage --start-maximized "$@"

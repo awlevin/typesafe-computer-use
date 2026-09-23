@@ -1,0 +1,12 @@
+#!/bin/sh
+# Put the sandbox back to a clean desktop between experiments, without recreating it:
+# every app the agent opened is closed, and every browser profile and temporary file is gone.
+pkill -u agent -f /usr/bin/chromium 2>/dev/null
+pkill -u agent -x xdg-open 2>/dev/null
+sleep 0.5
+pkill -9 -u agent -f /usr/bin/chromium 2>/dev/null
+# Everything the agent left in /tmp, except the display's own socket and lock (.X11-unix,
+# .X99-lock) and uv's lock, which belong to the desktop and the tools, not to a run.
+find /tmp -mindepth 1 -maxdepth 1 -user agent ! -name '.X*' ! -name 'uv-*.lock' -exec rm -rf {} + 2>/dev/null
+rm -rf /home/agent/.config/chromium
+echo "sandbox reset: apps closed, profiles and /tmp cleared"

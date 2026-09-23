@@ -17,7 +17,6 @@ from .config import answer_model, custom_writer_endpoint, writer_api, writer_bas
 from .dates import now_context
 from .models import Guidance, Item, Screen
 from .openai_writer import OpenAIWriter
-from .perception import near_field
 
 ANSWER_IMAGE_EDGE = 1568  # the longest edge a vision model reads without shrinking the image itself
 PLACEHOLDER_KEY = "not-needed"  # an endpoint you host yourself does not check a key
@@ -156,7 +155,7 @@ def compose_text(
         "frontmost_app": screen.app,
         "previous_actions": history[-8:],
         "focused_field": screen.field.summary() if screen.field else None,
-        "text_near_field": near_field(screen, items),
+        "text_near_field": screen.near_field(items),
         "all_screen_text": [it.text for it in items][:120],
     }
     data = _structured(

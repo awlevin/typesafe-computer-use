@@ -226,3 +226,15 @@ class Screen:
     def to_points(self, item: Item) -> tuple[float, float]:
         cx, cy = item.center
         return cx / self.scale, cy / self.scale
+
+    def near_field(self, items: list[Item], radius_pt: float = 160) -> list[str]:
+        """Text of items within a radius of the focused field, in screen points."""
+        f = self.field
+        if f is None:
+            return []
+        out = []
+        for it in items:
+            cx, cy = self.to_points(it)
+            if abs(cx - (f.x + f.w / 2)) < radius_pt + f.w / 2 and abs(cy - (f.y + f.h / 2)) < radius_pt:
+                out.append(it.text)
+        return out

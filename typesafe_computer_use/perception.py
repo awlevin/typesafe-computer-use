@@ -589,16 +589,3 @@ def merge_blocks(lines: list[Line]) -> list[Line]:
         block[2] = (min(bx1, x1), by1, max(bx2, x2), y2)
         block[3] = h
     return [(t, c, b) for t, c, b, _ in blocks]
-
-
-def near_field(screen: Screen, items: list[Item], radius_pt: float = 160) -> list[str]:
-    """Text of items within a radius of the focused field, in screen points."""
-    f = screen.field
-    if f is None:
-        return []
-    out = []
-    for it in items:
-        cx, cy = screen.to_points(it)
-        if abs(cx - (f.x + f.w / 2)) < radius_pt + f.w / 2 and abs(cy - (f.y + f.h / 2)) < radius_pt:
-            out.append(it.text)
-    return out
