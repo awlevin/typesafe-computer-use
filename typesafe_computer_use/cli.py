@@ -71,6 +71,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--image", type=Path, help="replay a saved capture instead of the live screen (never acts)")
     parser.add_argument("--app", help="frontmost app to report during replay")
     parser.add_argument("--url", help="browser URL to report during replay")
+    parser.add_argument(
+        "--share-clipboard",
+        action="store_true",
+        help="show the classifier the clipboard's text each step, to carry text between apps (off by default: it may hold a password)",
+    )
     _provider_flags(parser)
     args = parser.parse_args(argv)
 
@@ -97,6 +102,7 @@ def main(argv: list[str] | None = None) -> None:
         image=args.image,
         app=args.app,
         url=args.url,
+        clipboard=args.share_clipboard or settings.share_clipboard,
     )
 
     ctx_factory = session.context_factory(settings, args.goal, services, ask_user if sys.stdin.isatty() else None)
@@ -132,7 +138,10 @@ def inspect(argv: list[str] | None = None) -> None:
     text = args.out / "state.txt"
     screen.image.save(args.out / "raw.png")
     annotate(screen, items, chosen="", out=annotated)
-    text.write_text(render_payload(args.goal, screen, items, [], browser, settings.resolved_email()), encoding="utf-8")
+    text.write_text(
+        render_payload(args.goal, screen, items, [], browser, settings.resolved_email(), apps=desktop.installed_apps()),
+        encoding="utf-8",
+    )
 
     print(
         f"app={screen.app!r} url={screen.url!r} items={len(items)} ax={ax_count(items)} "

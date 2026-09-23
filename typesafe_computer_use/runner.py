@@ -50,6 +50,7 @@ class RunConfig:
     image: Path | None = None  # replay a saved capture (never acts)
     app: str | None = None  # frontmost app to report during replay
     url: str | None = None  # browser URL to report during replay
+    clipboard: bool = False  # show the classifier the clipboard's text each step: off unless the user chose it
 
     @property
     def replay(self) -> bool:
@@ -269,7 +270,7 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     timing: dict[str, float] = {}
     started = time.perf_counter()
     with phase(timing, "capture"):
-        screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser, timing)
+        screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser, timing, cfg.clipboard)
     items = perceive(screen, MAX_OPTIONS, cfg.goal, timing, None if cfg.replay else state.ocr_cache)
     state.view = (screen, items)
     if not screen_moved(state, screen, items, log):
@@ -278,11 +279,26 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     prefix = cfg.out / f"step-{step:03d}"  # three digits, so a run of 100 steps still lists in order
     screen.image.save(prefix.with_name(prefix.name + "-raw.png"))
     prefix.with_name(prefix.name + "-payload.txt").write_text(
-        render_payload(cfg.goal, screen, items, state.history, ctx.browser, ctx.email, tried, ctx.guidance), encoding="utf-8"
+        render_payload(
+            cfg.goal, screen, items, state.history, ctx.browser, ctx.email, tried, ctx.guidance, ctx.apps, cfg.clipboard
+        ),
+        encoding="utf-8",
     )
 
     with phase(timing, "decide"):
-        decision = decide(ctx.typesafe, cfg.goal, screen, items, state.history, ctx.browser, ctx.email, tried, ctx.guidance)
+        decision = decide(
+            ctx.typesafe,
+            cfg.goal,
+            screen,
+            items,
+            state.history,
+            ctx.browser,
+            ctx.email,
+            tried,
+            ctx.guidance,
+            ctx.apps,
+            cfg.clipboard,
+        )
     by_index = {str(it.index): it for it in items}
     annotate(screen, items, decision.chosen, prefix.with_suffix(".png"))
 
@@ -302,6 +318,11 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
         log(f"  offscreen ({decision.offscreen.confidence:.2f}):")
         for key, p in top(decision.offscreen, 3):
             log(f"  {p:5.2f}  [{key}] {screen.offscreen[int(key)].label!r}")
+    target = decision.app if decision.kind.choice == "open_app" else decision.target
+    if target is not None:  # every step answers the key question; only the one the kind uses is worth printing
+        log(f"  {decision.kind.choice} ({target.confidence:.2f}):")
+        for key, p in top(target, 3):
+            log(f"  {p:5.2f}  {describe_target(decision.kind.choice, key, screen)}")
 
     keep_going = resolve(cfg, ctx, state, screen, items, decision, timing, log)
     timing.setdefault("act", 0.0)
@@ -395,6 +416,12 @@ def repeating(state: RunState, what: str, waiting: bool, log: Log) -> bool:
     return False
 
 
+def describe_target(kind: str, key: str, screen: Screen) -> str:
+    """A target answer's key in words: a menu path or a window title for their positions, a name as it is."""
+    listed = {"press_menu": [m.path for m in screen.menu], "focus_window": [w.title for w in screen.windows]}.get(kind)
+    return repr(listed[int(key)]) if listed is not None and key.isdigit() and int(key) < len(listed) else key
+
+
 def answers(
     decision: Decision, screen: Screen, items: list[Item], timing: dict[str, float], tried: list[str], state: RunState
 ) -> dict:
@@ -411,6 +438,13 @@ def answers(
         "offscreen": decision.offscreen.choice if decision.offscreen else None,
         "offscreen_probabilities": decision.offscreen.probabilities if decision.offscreen else None,
         "offscreen_controls": offscreen_records(screen.offscreen),
+        "open_app": decision.app.choice if decision.app else None,  # "app" below is the frontmost one
+        "open_app_probabilities": decision.app.probabilities if decision.app else None,
+        "key": decision.key.choice if decision.key else None,
+        "key_probabilities": decision.key.probabilities if decision.key else None,
+        "menu": describe_target("press_menu", decision.menu.choice, screen) if decision.menu else None,
+        "window": describe_target("focus_window", decision.window.choice, screen) if decision.window else None,
+        "menu_commands": [item.path for item in screen.menu],
         "chosen": decision.chosen,
         "confidence": decision.confidence,
         "already_tried_on_this_screen": tried,

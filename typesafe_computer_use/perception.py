@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageStat
 
-from .config import MAX_OPTIONS, MIN_OCR_CONFIDENCE
+from .config import MAX_MENU_ITEMS, MAX_OPTIONS, MIN_OCR_CONFIDENCE
 from .models import AxNode, Box, Item, Screen
 from .platform_adapter import desktop
 from .timing import OCR_RECTS, OCR_REGION_PCT, phase
@@ -36,15 +36,18 @@ def capture(
     url: str | None = None,
     browser: str = "",
     timing: dict[str, float] | None = None,
+    clipboard: bool = False,
 ) -> Screen:
-    """Capture the main display, or load a saved capture for replay (then app/url are taken as given).
+    """Capture the display the work is on, or load a saved capture for replay (then app/url are taken as given).
+
+    The display is the one holding the frontmost window's centre, so a window dragged to a second
+    screen is captured there, with that screen's origin, rather than an empty main display. The
+    clipboard is read only when the user chose to share it, since it holds whatever was last copied.
 
     Each query below is a round trip to the window server, AX, or AppleScript. Pass `timing` to
-    record the seconds each one costs under "screenshot", "app", "window", "field", and "url".
+    record the seconds each one costs under "screenshot", "app", "window", "field", "url" and "menu".
     """
     replay = image_path is not None and app is not None
-    with phase(timing, "screenshot"):
-        image = Image.open(image_path).convert("RGB") if image_path else desktop.screenshot()
     with phase(timing, "app"):
         if replay:
             frontmost, pid = app, None
@@ -53,13 +56,55 @@ def capture(
             frontmost = app or frontmost
     with phase(timing, "window"):
         window = None if replay else desktop.frontmost_window_bounds(pid)
+    with phase(timing, "screenshot"):
+        if image_path:
+            image, bounds = Image.open(image_path).convert("RGB"), None
+        else:
+            displays = desktop.active_displays()
+            index = display_holding(window_center(window), displays)
+            image, bounds = desktop.screenshot(index), displays[index - 1]
     with phase(timing, "field"):
         field = None if replay else desktop.focused_field()
     with phase(timing, "url"):
         page_url = url if url is not None else (None if replay else desktop.browser_url(browser))
+    live = not replay and pid is not None
+    with phase(timing, "menu"):
+        menu = desktop.menu_items(pid, MAX_MENU_ITEMS) if live else []
+        windows = desktop.app_windows(pid) if live else []
+        running = frozenset(desktop.running_apps()) if not replay else frozenset()
     return Screen(
-        image=image, scale=desktop.display_scale(image), app=frontmost, field=field, url=page_url, pid=pid, window=window
+        image=image,
+        scale=desktop.display_scale(image, bounds),
+        app=frontmost,
+        field=field,
+        url=page_url,
+        pid=pid,
+        window=window,
+        origin=(bounds[0], bounds[1]) if bounds else (0.0, 0.0),
+        menu=menu,
+        windows=windows,
+        running=running,
+        clipboard=desktop.clipboard_text() if clipboard and not replay else "",
     )
+
+
+def window_center(window: tuple[float, float, float, float] | None) -> tuple[float, float] | None:
+    if window is None:
+        return None
+    x, y, w, h = window
+    return x + w / 2, y + h / 2
+
+
+def display_holding(point: tuple[float, float] | None, displays: list[tuple[float, float, float, float]]) -> int:
+    """Which display, counted from 1 as the adapter's screenshot counts, a point in global points is on.
+    The main one when there is no point or it is on none of them."""
+    if point is None:
+        return 1
+    x, y = point
+    for index, (ox, oy, w, h) in enumerate(displays, start=1):
+        if ox <= x < ox + w and oy <= y < oy + h:
+            return index
+    return 1
 
 
 def goal_echoes(goal: str) -> set[str]:
@@ -96,7 +141,7 @@ def perceive(
         blocks = ocr(screen, budget, goal, cache, timing)
     with phase(timing, "ax"):
         nodes, hidden = ax_nodes(screen, budget)
-        controls = to_ax_items(nodes, screen.scale)
+        controls = to_ax_items(nodes, screen)
     merged = merge_with_origins(blocks, controls, budget)
     screen.ax_refs.clear()
     screen.ax_refs.update({it.index: nodes[origin].ref for it, origin in merged if origin is not None and nodes[origin].ref})
@@ -218,7 +263,9 @@ def ocr_region(screen: Screen) -> Box:
         return (0.0, 0.0, width, height)
     x, y, w, h = screen.window
     scale, margin = screen.scale, REGION_MARGIN_PT
-    window = ((x - margin) * scale, (y - margin) * scale, (x + w + margin) * scale, (y + h + margin) * scale)
+    left, top = screen.to_pixels(x - margin, y - margin)
+    right, bottom = screen.to_pixels(x + w + margin, y + h + margin)
+    window = (left, top, right, bottom)
     joined = (window[0], min(window[1], 0.0), window[2], max(window[3], MENU_BAR_PT * scale))
     clamped = (max(0.0, joined[0]), max(0.0, joined[1]), min(width, joined[2]), min(height, joined[3]))
     return clamped if clamped[2] > clamped[0] and clamped[3] > clamped[1] else (0.0, 0.0, width, height)
@@ -464,27 +511,21 @@ def offscreen_controls(nodes: list[AxNode], items: list[Item]) -> list[AxNode]:
     return out
 
 
-def to_ax_items(nodes: list[AxNode], scale: float) -> list[Item]:
-    """Controls as items, converted from screen points to capture pixels."""
-    return [
-        Item(
-            index=i,
-            text=node.label,
-            ocr_confidence=1.0,
-            x1=node.x * scale,
-            y1=node.y * scale,
-            x2=(node.x + node.w) * scale,
-            y2=(node.y + node.h) * scale,
-            role=node.role_word,
-            source="ax",
+def to_ax_items(nodes: list[AxNode], screen: Screen) -> list[Item]:
+    """Controls as items, converted from global screen points to this capture's pixels."""
+    items = []
+    for i, node in enumerate(nodes):
+        x1, y1 = screen.to_pixels(node.x, node.y)
+        x2, y2 = screen.to_pixels(node.x + node.w, node.y + node.h)
+        items.append(
+            Item(index=i, text=node.label, ocr_confidence=1.0, x1=x1, y1=y1, x2=x2, y2=y2, role=node.role_word, source="ax")
         )
-        for i, node in enumerate(nodes)
-    ]
+    return items
 
 
 def ax_items(screen: Screen, budget: int) -> list[Item]:
     """The frontmost app's labelled on-screen controls as items on the capture."""
-    return to_ax_items(ax_nodes(screen, budget)[0], screen.scale)
+    return to_ax_items(ax_nodes(screen, budget)[0], screen)
 
 
 def merge_sources(ocr_items: list[Item], ax_items: list[Item], budget: int = MAX_OPTIONS) -> list[Item]:

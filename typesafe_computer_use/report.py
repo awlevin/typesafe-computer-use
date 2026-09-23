@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 from PIL import ImageDraw, ImageFont
 
-from .decide import base_state, item_criteria, kind_criteria, offscreen_criteria, site_criteria
+from .decide import base_state, item_criteria, offscreen_criteria, screen_kind_criteria, site_criteria, target_criteria
 from .models import Guidance, Item, Screen
 
 FONT_PATH = "/System/Library/Fonts/Helvetica.ttc"
@@ -45,8 +46,11 @@ def render_payload(
     email: str | None,
     tried: list[str] | None = None,
     guidance: Guidance | None = None,
+    apps: Sequence[str] = (),
+    clipboard_shared: bool = False,
 ) -> str:
-    """Exactly what goes to TypeSafe for this screen, plus a table of every item."""
+    """Exactly what goes to the classifier for this screen, plus a table of every item."""
+    targets = target_criteria(screen, browser, apps, clipboard_shared)
     parts = [
         RULE,
         "STATE  (sent as `state`)",
@@ -56,7 +60,7 @@ def render_payload(
         RULE,
         "QUESTION kind  (Choice criteria)",
         RULE,
-        json.dumps(kind_criteria(browser, email, bool(screen.offscreen), screen.field), indent=2),
+        json.dumps(screen_kind_criteria(browser, email, screen, items, targets), indent=2),
         "",
         RULE,
         "QUESTION item  (Choice criteria)",
@@ -77,6 +81,8 @@ def render_payload(
             json.dumps(offscreen_criteria(screen.offscreen), indent=2),
             "",
         ]
+    for name, criteria in targets.items():
+        parts += [RULE, f"QUESTION {name}  (Choice criteria)", RULE, json.dumps(criteria, indent=2), ""]
     parts += [
         RULE,
         f"ITEMS  ({len(items)} after merge/filter, {ax_count(items)} from the accessibility tree; "
@@ -113,12 +119,11 @@ def annotate(screen: Screen, items: list[Item], chosen: str, out: Path) -> None:
     except OSError:
         font = ImageFont.load_default()
     for it in items:
-        hit = str(it.index) == chosen
+        hit = chosen.rpartition(":")[2] == str(it.index)  # a double or right click names its item after a prefix
         color = (255, 0, 0) if hit else (255, 140, 0) if it.from_ax else (0, 160, 255)
         draw.rectangle((it.x1, it.y1, it.x2, it.y2), outline=color, width=3 if hit else 1)
         draw.text((it.x1, max(0, it.y1 - 12 * screen.scale)), str(it.index), fill=color, font=font)
     f = screen.field
     if f is not None:
-        s = screen.scale
-        draw.rectangle((f.x * s, f.y * s, (f.x + f.w) * s, (f.y + f.h) * s), outline=(0, 200, 0), width=3)
+        draw.rectangle((*screen.to_pixels(f.x, f.y), *screen.to_pixels(f.x + f.w, f.y + f.h)), outline=(0, 200, 0), width=3)
     image.save(out)

@@ -1716,3 +1716,163 @@ def test_l53_unverified_keystrokes_stay_when_the_field_will_not_take_a_value(mon
     assert "via keystrokes" in state.history[0] and "could not safely restore previous value" in state.history[0]
     assert world.typed["Search"] == "bruno mars tour"  # left for the next step to see, not erased blind
     assert world.log == ["clear_field", "type:bruno mars tour"]  # emptied before typing, never after
+
+
+# ------------------------------------------------------------------ beyond the one window
+# The actions that reach past what the capture shows: another app, the menu bar, another window,
+# the keyboard, and the gestures a plain click is not. Each is offered only when it has something
+# to act on this step, so the scenarios also read what the classifier was offered.
+
+
+def test_l54_an_app_that_is_not_open_is_opened_by_name(monkeypatch, tmp_path):
+    world = World(
+        [
+            Page(name="desktop", app="Finder", items=["Desktop", "Documents"], on={"activate:Notes": "notes"}),
+            Page(name="notes", app="Notes", items=["New Note", "All iCloud"]),
+        ]
+    )
+    world.running = {"Finder", "Google Chrome"}
+    policy = scripted(("open_app", "Notes"), ("done", None))
+
+    state = drive(
+        world,
+        policy,
+        goal="open my notes",
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+        apps=("Finder", "Google Chrome", "Notes"),
+    )
+
+    assert state.outcome == "done"
+    assert state.history == ["opened Notes"]
+    assert world.page.name == "notes"
+    assert world.log == ["activate:Notes"]
+    offered = world.fake.asked[0]["app"].criteria
+    # The browser is use_browser's, and the app already in front is nothing to switch to.
+    assert list(offered) == ["Notes"] and "Not running" in offered["Notes"]
+    assert "open_app" in world.fake.asked[0]["kind"].criteria
+
+
+def test_l55_with_no_other_app_to_open_the_action_is_not_offered(monkeypatch, tmp_path):
+    world = World([Page(name="desktop", app="Finder", items=["Desktop"])])
+
+    drive(world, scripted(("done", None)), monkeypatch=monkeypatch, tmp_path=tmp_path, apps=("Finder", "Google Chrome"))
+
+    asked = world.fake.asked[0]
+    assert "open_app" not in asked["kind"].criteria and "app" not in asked
+
+
+def test_l56_a_menu_command_runs_without_the_menu_opening(monkeypatch, tmp_path):
+    world = World(
+        [
+            Page(
+                name="note",
+                app="Notes",
+                items=["Groceries", "eggs milk bread"],
+                menu=("Format ▸ Checklist", ("Edit ▸ Undo", ("z", True, False)), "Edit ▸ AutoFill ▸ Passwords…"),
+                on={"menu:Format ▸ Checklist": "checklist"},
+            ),
+            Page(name="checklist", app="Notes", items=["Groceries", "☐ eggs", "☐ milk", "☐ bread"]),
+        ]
+    )
+    policy = scripted(("press_menu", "Format ▸ Checklist"), ("done", None))
+
+    state = drive(world, policy, goal="make the grocery note a checklist", monkeypatch=monkeypatch, tmp_path=tmp_path)
+
+    assert state.outcome == "done"
+    assert state.history == ["ran the menu command 'Format ▸ Checklist'"]
+    assert world.log == ["menu:Format ▸ Checklist"]
+    assert world.mouse == []  # pressed through accessibility, not clicked
+    # Undo is the undo key's, and AutoFill fills in passwords: neither is offered from the menu.
+    assert list(world.fake.asked[0]["menu"].criteria.values()) == ["Format ▸ Checklist"]
+
+
+def test_l57_another_window_of_the_app_is_brought_forward(monkeypatch, tmp_path):
+    world = World(
+        [
+            Page(name="draft", app="Mail", items=["Draft", "To:"], windows=("Draft", "Inbox"), on={"window:Inbox": "inbox"}),
+            Page(name="inbox", app="Mail", items=["Inbox", "Receipt from the venue"], windows=("Inbox", "Draft")),
+        ]
+    )
+    policy = scripted(("focus_window", "Inbox"), ("done", None))
+
+    state = drive(world, policy, goal="find the venue's receipt", monkeypatch=monkeypatch, tmp_path=tmp_path)
+
+    assert state.outcome == "done"
+    assert state.history == ["brought the window 'Inbox' to the front"]
+    assert world.log == ["window:Inbox"]
+    assert list(world.fake.asked[0]["window"].criteria.values()) == ["'Inbox'"]  # the front one is not on offer
+    assert world.fake.states[0]["other_windows_of_this_app"] == ["Inbox"]
+
+
+def test_l58_a_single_window_offers_no_window_to_switch_to(monkeypatch, tmp_path):
+    world = World([Page(name="draft", app="Mail", items=["Draft"], windows=("Draft",))])
+
+    drive(world, scripted(("done", None)), monkeypatch=monkeypatch, tmp_path=tmp_path)
+
+    assert "focus_window" not in world.fake.asked[0]["kind"].criteria and "window" not in world.fake.asked[0]
+
+
+def test_l59_a_named_shortcut_saves_the_document(monkeypatch, tmp_path):
+    world = World(
+        [
+            Page(name="edited", app="TextEdit", items=["Untitled — Edited", "hello"], on={"cmd+s": "saved"}),
+            Page(name="saved", app="TextEdit", items=["Untitled", "hello"]),
+        ]
+    )
+    policy = scripted(("press_key", "save"), ("done", None))
+
+    state = drive(world, policy, goal="save the document", monkeypatch=monkeypatch, tmp_path=tmp_path)
+
+    assert state.outcome == "done"
+    assert state.history == ["pressed save"]
+    assert world.log == ["cmd+s"]
+    keys = world.fake.asked[0]["key"].criteria
+    assert "back" not in keys and "page_down" not in keys  # go_back and scroll_down already are those
+    assert "backspace" not in keys  # no field to delete in
+
+
+def test_l60_a_file_is_opened_with_a_double_click_and_its_menu_with_a_right_click(monkeypatch, tmp_path):
+    world = World(
+        [
+            Page(name="folder", app="Finder", items=["Report.pdf", "Notes.txt"], on={"right-click:Report.pdf": "context"}),
+            Page(name="context", app="Finder", items=["Open With", "Move to Trash"], on={"click:Open With": "folder2"}),
+            Page(name="folder2", app="Finder", items=["Report.pdf", "Notes.txt"], on={"double-click:Report.pdf": "preview"}),
+            Page(name="preview", app="Preview", items=["Report.pdf — Page 1 of 3"]),
+        ]
+    )
+    policy = scripted(
+        ("right_click_item", "Report.pdf"), ("click_item", "Open With"), ("double_click_item", "Report.pdf"), ("done", None)
+    )
+
+    state = drive(world, policy, goal="open the report", monkeypatch=monkeypatch, tmp_path=tmp_path)
+
+    assert state.outcome == "done"
+    assert state.history == ["right-clicked 'Report.pdf'", "clicked 'Open With'", "double-clicked 'Report.pdf'"]
+    assert world.log == ["right-click:Report.pdf", "click:Open With", "double-click:Report.pdf"]
+    assert world.mouse == [FIRST_ROW, FIRST_ROW, FIRST_ROW]  # both gestures go to the pixel, never to an element
+
+
+def test_l61_nothing_is_offered_that_would_put_text_into_a_password_field(monkeypatch, tmp_path):
+    world = World(
+        [
+            Page(
+                name="login",
+                items=["Sign in", "Password"],
+                field="Password",
+                secure=True,
+                url="https://example.com/login",
+                menu=("Edit ▸ Paste and Match Style", "View ▸ Actual Size"),
+            )
+        ]
+    )
+    world.typed["Password"] = "hunter2"
+
+    state = drive(world, scripted(("none", None)), goal="sign in", monkeypatch=monkeypatch, tmp_path=tmp_path)
+
+    offered = world.fake.asked[0]
+    assert "type_text" not in offered["kind"].criteria
+    assert "paste" not in offered["key"].criteria and "backspace" not in offered["key"].criteria
+    assert list(offered["menu"].criteria.values()) == ["View ▸ Actual Size"]  # no paste from the menu either
+    assert world.fake.states[0]["focused_field"]["current_value"] == ""  # and its value never reaches the classifier
+    assert state.history == [] and world.log == []

@@ -3,22 +3,55 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from typesafe_sdk import Choice, ChoiceAnswer, Noul, TypeSafeClient
 
-from .config import SITES
+from .apps import same_app
+from .config import CLIPBOARD_CHARS, KEY_ACTIONS, MAX_OPTIONS, SITES
 from .dates import date_hints, now_context
-from .models import AxNode, Field, Guidance, Item, Screen
+from .models import AxNode, Field, Guidance, Item, MenuItem, Screen, WindowRef
 from .writer import credential_field
 
 STOP_KINDS = ("done", "none")
+CLICK_KINDS = ("click_item", "double_click_item", "right_click_item")  # each takes its target from the item question
 OFFSCREEN_PREFIX = "offscreen:"
+DOUBLE_PREFIX = "double:"
+RIGHT_PREFIX = "right:"
 PRESS_OFFSCREEN = (
     "Activate a labelled control that the app exposes but that is not currently visible on screen "
     "(chosen in the offscreen question). Use when the needed control is known to exist but is "
     "scrolled out of view or not yet shown."
 )
+
+OPEN_APP = (
+    "Open another application, or switch to it when it is already running (chosen in the app question). "
+    "This is the only way to reach an app that is not on screen: nothing on screen points at it. For a "
+    "website, use use_browser instead."
+)
+PRESS_MENU = (
+    "Run a command from the frontmost app's menu bar (chosen in the menu question). The menu holds what "
+    "the app can do, commands with no button on screen among them, and runs without being opened."
+)
+FOCUS_WINDOW = (
+    "Bring another of the frontmost app's own windows to the front (chosen in the window question). Use it "
+    "when the work belongs in a window of this app that is behind the one in front."
+)
+PRESS_KEY = (
+    "Press a keyboard shortcut (chosen in the key question): save, undo, copy, paste, find, and the arrows "
+    "among them. Use it for what a key does better than a click, and undo when the last action went wrong."
+)
+DOUBLE_CLICK = (
+    "Double-click one of the on-screen items (chosen in the item question): to open a file or folder from a "
+    "list, or to select a word."
+)
+RIGHT_CLICK = (
+    "Right-click one of the on-screen items (chosen in the item question) to open its context menu, whose "
+    "entries are items on the next step."
+)
+# Never offered from a menu, whatever the app: they fill in saved credentials, a path that types a password.
+MENU_WITHHELD = ("autofill", "password", "passkey")
 
 # Said only while a focus is set, so a run the writer never steered asks the question it always asked.
 FOCUS_RULE = (
@@ -78,11 +111,102 @@ def fixed_actions(browser: str, email: str | None, field: Field | None = None) -
     return actions
 
 
-def kind_criteria(browser: str, email: str | None, offscreen: bool = False, field: Field | None = None) -> dict[str, str]:
-    clicks = {"click_item": "Click one of the on-screen text items (chosen in the item question)."}
+def kind_criteria(
+    browser: str,
+    email: str | None,
+    offscreen: bool = False,
+    field: Field | None = None,
+    items: bool = True,
+    apps: bool = False,
+    menu: bool = False,
+    windows: bool = False,
+) -> dict[str, str]:
+    """Every action on offer this step. One that has nothing to act on is not offered at all."""
+    clicks: dict[str, str] = {}
+    if items:
+        clicks["click_item"] = "Click one of the on-screen text items (chosen in the item question)."
+        clicks["double_click_item"] = DOUBLE_CLICK
+        clicks["right_click_item"] = RIGHT_CLICK
     if offscreen:
         clicks["press_offscreen"] = PRESS_OFFSCREEN
-    return {**clicks, **fixed_actions(browser, email, field)}
+    if apps:
+        clicks["open_app"] = OPEN_APP
+    if menu:
+        clicks["press_menu"] = PRESS_MENU
+    if windows:
+        clicks["focus_window"] = FOCUS_WINDOW
+    return {**clicks, "press_key": PRESS_KEY, **fixed_actions(browser, email, field)}
+
+
+def key_criteria(field: Field | None, clipboard_shared: bool = False) -> dict[str, str]:
+    """The named keys that could do something now. Paste never reaches a credential field, and
+    backspace needs a field that could be typed into."""
+    keys = {name: action.description for name, action in KEY_ACTIONS.items()}
+    if field is not None and credential_field(field):
+        del keys["paste"]
+    if not typable(field):
+        del keys["backspace"]
+    if clipboard_shared:
+        keys["copy"] += " The clipboard's text is in the state on the next step, which is how text is carried between apps."
+    return keys
+
+
+# The chords a named key or a fixed action already sends. A menu command behind one of them is the
+# same move offered twice, which splits the vote, so the menu leaves it to the key.
+TAKEN_CHORDS = {(action.key, action.command, action.shift) for action in KEY_ACTIONS.values() if len(action.key) == 1} | {
+    ("[", True, False)  # go_back
+}
+
+
+def menu_offered(screen: Screen) -> list[tuple[int, MenuItem]]:
+    """The menu commands worth offering, with their position in `screen.menu`: not one a named key
+    already runs, never one that fills in a saved credential, and no paste into a credential field."""
+    credential = screen.field is not None and credential_field(screen.field)
+    out = []
+    for i, item in enumerate(screen.menu):
+        title = item.path.casefold()
+        if item.chord in TAKEN_CHORDS or any(word in title for word in MENU_WITHHELD):
+            continue
+        if credential and "paste" in title:
+            continue
+        out.append((i, item))
+    return out
+
+
+def menu_criteria(screen: Screen) -> dict[str, str]:
+    """Each command as its menu path, keyed by position, since two menus can share an item name."""
+    return {str(i): item.path for i, item in menu_offered(screen)}
+
+
+def windows_offered(screen: Screen) -> list[tuple[int, WindowRef]]:
+    """The app's other windows, with their position: the one already in front is nothing to switch to."""
+    return [(i, window) for i, window in enumerate(screen.windows) if not window.main]
+
+
+def window_criteria(screen: Screen) -> dict[str, str]:
+    return {str(i): repr(window.title) for i, window in windows_offered(screen)}
+
+
+def apps_offered(apps: Sequence[str], screen: Screen, browser: str) -> list[str]:
+    """The apps open_app could bring up now, running ones first, so a Mac with more apps than a
+    Choice holds keeps the likeliest. Not the browser, which is use_browser's, and not the app
+    already in front, which choosing would leave exactly as it is."""
+    candidates = [name for name in apps if not same_app(name, browser) and not same_app(screen.app, name)]
+    running = [name for name in candidates if name in screen.running]
+    return [*running, *(name for name in candidates if name not in screen.running)][:MAX_OPTIONS]
+
+
+def app_criteria(apps: Sequence[str], screen: Screen, browser: str) -> dict[str, str]:
+    """Each app, saying what choosing it would do."""
+    return {
+        name: f"{name}. "
+        + (
+            "Already running: this switches to it, its windows as they were left."
+            if name in screen.running
+            else "Not running: this launches it."
+        )
+        for name in apps_offered(apps, screen, browser)
+    }
 
 
 ROW_MATES = 3  # how many neighbours name a duplicated item's row in a criterion; the history line takes them all
@@ -142,6 +266,48 @@ def site_criteria() -> dict[str, str]:
     }
 
 
+def target_criteria(screen: Screen, browser: str, apps: Sequence[str] = (), clipboard_shared: bool = False) -> dict[str, dict]:
+    """The criteria of the questions that name what a key, menu, window or app action acts on, for
+    the ones that have anything to offer this step. The key question always has."""
+    out = {
+        "key": key_criteria(screen.field, clipboard_shared),
+        "menu": menu_criteria(screen),
+        "window": window_criteria(screen),
+        "app": app_criteria(apps, screen, browser),
+    }
+    return {name: criteria for name, criteria in out.items() if criteria}
+
+
+def screen_kind_criteria(
+    browser: str, email: str | None, screen: Screen, items: list[Item], targets: dict[str, dict]
+) -> dict[str, str]:
+    """kind_criteria for this screen: every kind whose target is there to act on."""
+    return kind_criteria(
+        browser,
+        email,
+        bool(screen.offscreen),
+        screen.field,
+        items=bool(items),
+        apps="app" in targets,
+        menu="menu" in targets,
+        windows="window" in targets,
+    )
+
+
+TARGET_INSTRUCTIONS = {
+    "key": "If pressing a keyboard shortcut is the right move, which one? Undo, when the last action made things worse.",
+    "menu": (
+        "If running a command from the app's menu bar is the right move, which command? These are the frontmost "
+        "app's commands, by their menu path."
+    ),
+    "window": "If another window of this app is where the work belongs, which window?",
+    "app": (
+        "If opening or switching to another application is the right move, which one? Prefer one already running "
+        "when it suits the goal, since its windows are as the user left them."
+    ),
+}
+
+
 def base_state(
     goal: str,
     screen: Screen,
@@ -176,6 +342,8 @@ def base_state(
             for it in items
         ],
         **({"offscreen_controls": offscreen_records(screen.offscreen)} if screen.offscreen else {}),
+        **({"clipboard": screen.clipboard[:CLIPBOARD_CHARS]} if screen.clipboard else {}),
+        **({"other_windows_of_this_app": [w.title for _, w in windows_offered(screen)]} if windows_offered(screen) else {}),
     }
 
 
@@ -185,10 +353,19 @@ class Decision:
     item: ChoiceAnswer | None
     site: ChoiceAnswer
     offscreen: ChoiceAnswer | None = None
+    app: ChoiceAnswer | None = None
+    key: ChoiceAnswer | None = None
+    menu: ChoiceAnswer | None = None
+    window: ChoiceAnswer | None = None
 
     @property
     def clicking(self) -> bool:
-        return self.kind.choice == "click_item" and self.item is not None
+        return self.kind.choice in CLICK_KINDS and self.item is not None
+
+    @property
+    def target(self) -> ChoiceAnswer | None:
+        """The answer that names what a key, menu or window action acts on, when this is one."""
+        return {"press_key": self.key, "press_menu": self.menu, "focus_window": self.window}.get(self.kind.choice)
 
     @property
     def pressing_offscreen(self) -> bool:
@@ -197,7 +374,8 @@ class Decision:
     @property
     def chosen(self) -> str:
         if self.clicking:
-            return self.item.choice
+            prefix = {"double_click_item": DOUBLE_PREFIX, "right_click_item": RIGHT_PREFIX}.get(self.kind.choice, "")
+            return f"{prefix}{self.item.choice}"
         if self.pressing_offscreen:
             return f"{OFFSCREEN_PREFIX}{self.offscreen.choice}"
         return self.kind.choice
@@ -207,11 +385,16 @@ class Decision:
         # Only the answers that name a target lower the confidence: a click or a press lands
         # somewhere, and the wrong somewhere is not undone. use_browser reads the site answer too,
         # but every outcome of it is a page the next step can leave, so a split there must not
-        # stop the run.
+        # stop the run. open_app is the same: the wrong app is left by opening another, and over a
+        # hundred and fifty of them the mass spreads so thin that gating on it would stop nearly
+        # every run that wanted one. A key, a menu command and a window each do something to what
+        # is in front, so they gate like a click.
         if self.clicking:
             return min(self.kind.confidence, self.item.confidence)
         if self.pressing_offscreen:
             return min(self.kind.confidence, self.offscreen.confidence)
+        if self.target is not None:
+            return min(self.kind.confidence, self.target.confidence)
         return self.kind.confidence
 
     @property
@@ -229,7 +412,10 @@ def decide(
     email: str | None,
     tried: list[str] | None = None,
     guidance: Guidance | None = None,
+    apps: Sequence[str] = (),
+    clipboard_shared: bool = False,
 ) -> Decision:
+    targets = target_criteria(screen, browser, apps, clipboard_shared)
     questions = {
         "kind": Choice(
             instructions=(
@@ -239,7 +425,7 @@ def decide(
                 "tried on this screen: each of those led straight back here."
                 + (FOCUS_RULE if guidance and guidance.focus else "")
             ),
-            criteria=kind_criteria(browser, email, bool(screen.offscreen), screen.field),
+            criteria=screen_kind_criteria(browser, email, screen, items, targets),
         ),
         "site": Choice(
             instructions=(
@@ -268,8 +454,19 @@ def decide(
             ),
             criteria=offscreen_criteria(screen.offscreen),
         )
+    for name, criteria in targets.items():
+        questions[name] = Choice(instructions=TARGET_INSTRUCTIONS[name], criteria=criteria)
     answers = client.system_one(state=base_state(goal, screen, items, history, tried, guidance), questions=questions).answers
-    return Decision(kind=answers["kind"], item=answers.get("item"), site=answers["site"], offscreen=answers.get("offscreen"))
+    return Decision(
+        kind=answers["kind"],
+        item=answers.get("item"),
+        site=answers["site"],
+        offscreen=answers.get("offscreen"),
+        app=answers.get("app"),
+        key=answers.get("key"),
+        menu=answers.get("menu"),
+        window=answers.get("window"),
+    )
 
 
 def verify_typed(client: TypeSafeClient, goal: str, field_before: Field, typed: str, field_after: Field | None) -> float:

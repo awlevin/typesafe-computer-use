@@ -113,10 +113,12 @@ def make_text_writer(endpoint: Endpoint, model: str, keys: Mapping[str, str] | N
 def context_factory(settings: Settings, goal: str, services: Services, ask: Callable[[str], str] | None = None):
     """The callable `runner.run` builds the action Context with, once the classifier is open.
 
-    The browser name is resolved once against what is installed, so "Chrome" in a settings file
-    is Google Chrome, and a name nothing matches is left for the platform to refuse.
+    The apps are read once, here, rather than every step: installing one mid-run is not a thing.
+    The browser name is resolved against them, so "Chrome" in a settings file is Google Chrome, and
+    a name nothing matches is left for the platform to refuse.
     """
-    browser = resolve_app(settings.resolved_browser(), desktop.installed_apps())
+    apps = tuple(desktop.installed_apps())
+    browser = resolve_app(settings.resolved_browser(), apps)
 
     def factory(typesafe, history: list[str]) -> Context:
         return Context(
@@ -128,6 +130,7 @@ def context_factory(settings: Settings, goal: str, services: Services, ask: Call
             answerer=services.answerer,
             history=history,
             ask=ask,
+            apps=apps,
         )
 
     return factory

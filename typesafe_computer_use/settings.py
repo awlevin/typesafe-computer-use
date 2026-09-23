@@ -193,6 +193,11 @@ class Settings:
     answer: Endpoint = field(default_factory=lambda: Endpoint(provider="anthropic"))
     browser: str = ""
     email: str = ""
+    # Off unless the user turns it on. The clipboard holds whatever was last copied, a password from
+    # a manager included, and nothing about a copied string says it is one: the credential guard sees
+    # fields, never the clipboard. On, the classifier reads it every step, which is how text is
+    # carried from one app to another.
+    share_clipboard: bool = False
     # API keys typed into the app, by environment variable name. One key serves every endpoint that
     # names it, so a key entered once is a key the writer, the answer and the classifier all have.
     keys: dict[str, str] = field(default_factory=dict)
@@ -289,6 +294,8 @@ def from_dict(raw: dict) -> Settings:
     for name in ("browser", "email"):
         if isinstance(raw.get(name), str):
             setattr(settings, name, raw[name])
+    if isinstance(raw.get("share_clipboard"), bool):
+        settings.share_clipboard = raw["share_clipboard"]
     return settings
 
 
