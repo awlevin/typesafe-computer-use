@@ -120,8 +120,12 @@ def kind_criteria(
     apps: bool = False,
     menu: bool = False,
     windows: bool = False,
+    listening: bool = False,
 ) -> dict[str, str]:
-    """Every action on offer this step. One that has nothing to act on is not offered at all."""
+    """Every action on offer this step. One that has nothing to act on is not offered at all.
+
+    While the goal is still being spoken, done and none are judgements of what has been said so far:
+    the loop waits for the rest either way, and the words must not claim more than that."""
     clicks: dict[str, str] = {}
     if items:
         clicks["click_item"] = "Click one of the on-screen text items (chosen in the item question)."
@@ -135,7 +139,11 @@ def kind_criteria(
         clicks["press_menu"] = PRESS_MENU
     if windows:
         clicks["focus_window"] = FOCUS_WINDOW
-    return {**clicks, "press_key": PRESS_KEY, **fixed_actions(browser, email, field)}
+    actions = {**clicks, "press_key": PRESS_KEY, **fixed_actions(browser, email, field)}
+    if listening:
+        actions["done"] = "Everything asked for so far is done; the user is still saying what else they want."
+        actions["none"] = "Nothing on this screen helps with the part of the goal spoken so far."
+    return actions
 
 
 def key_criteria(field: Field | None, clipboard_shared: bool = False) -> dict[str, str]:
@@ -279,7 +287,7 @@ def target_criteria(screen: Screen, browser: str, apps: Sequence[str] = (), clip
 
 
 def screen_kind_criteria(
-    browser: str, email: str | None, screen: Screen, items: list[Item], targets: dict[str, dict]
+    browser: str, email: str | None, screen: Screen, items: list[Item], targets: dict[str, dict], listening: bool = False
 ) -> dict[str, str]:
     """kind_criteria for this screen: every kind whose target is there to act on."""
     return kind_criteria(
@@ -291,6 +299,7 @@ def screen_kind_criteria(
         apps="app" in targets,
         menu="menu" in targets,
         windows="window" in targets,
+        listening=listening,
     )
 
 
@@ -315,6 +324,7 @@ def base_state(
     history: list[str],
     tried: list[str] | None = None,
     guidance: Guidance | None = None,
+    listening: bool = False,
 ) -> dict:
     """The facts the classifier reads. `tried` lists the actions already taken on this same screen
     earlier in the run, each of which led back here: a fact the code knows and the model cannot.
@@ -323,6 +333,7 @@ def base_state(
     mates = row_mates(items)
     return {
         "goal": goal,
+        **({"the_user_is_still_speaking_this_goal": True} if listening else {}),
         **(guidance.state() if guidance else {}),
         "now": now_context(),
         "frontmost_app": screen.app,
@@ -414,6 +425,7 @@ def decide(
     guidance: Guidance | None = None,
     apps: Sequence[str] = (),
     clipboard_shared: bool = False,
+    listening: bool = False,
 ) -> Decision:
     targets = target_criteria(screen, browser, apps, clipboard_shared)
     questions = {
@@ -425,7 +437,7 @@ def decide(
                 "tried on this screen: each of those led straight back here."
                 + (FOCUS_RULE if guidance and guidance.focus else "")
             ),
-            criteria=screen_kind_criteria(browser, email, screen, items, targets),
+            criteria=screen_kind_criteria(browser, email, screen, items, targets, listening),
         ),
         "site": Choice(
             instructions=(
@@ -456,7 +468,9 @@ def decide(
         )
     for name, criteria in targets.items():
         questions[name] = Choice(instructions=TARGET_INSTRUCTIONS[name], criteria=criteria)
-    answers = client.system_one(state=base_state(goal, screen, items, history, tried, guidance), questions=questions).answers
+    answers = client.system_one(
+        state=base_state(goal, screen, items, history, tried, guidance, listening), questions=questions
+    ).answers
     return Decision(
         kind=answers["kind"],
         item=answers.get("item"),

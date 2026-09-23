@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from PIL import ImageDraw, ImageFont
@@ -16,17 +16,25 @@ RULE = "=" * 78
 
 
 class Log:
-    """Print and append to a file."""
+    """Print, append to a file, and hand each line to anything else following the run.
 
-    def __init__(self, path: Path | None = None):
+    `sink` is how a window follows a run: the lines the terminal gets, as they are written, with no
+    second formatting of the same facts. `quiet` prints nothing, for a run with no terminal to print to.
+    """
+
+    def __init__(self, path: Path | None = None, sink: Callable[[str], None] | None = None, quiet: bool = False):
         self.path = path
+        self.sink = sink
+        self.quiet = quiet
 
     def __call__(self, msg: str = "", echo: bool = True) -> None:
-        if echo:
+        if echo and not self.quiet:
             print(msg)
         if self.path is not None:
             with self.path.open("a", encoding="utf-8") as f:
                 f.write(msg + "\n")
+        if self.sink is not None:
+            self.sink(msg)
 
 
 def top(answer, n: int = 5) -> list[tuple[str, float]]:
@@ -48,6 +56,7 @@ def render_payload(
     guidance: Guidance | None = None,
     apps: Sequence[str] = (),
     clipboard_shared: bool = False,
+    listening: bool = False,
 ) -> str:
     """Exactly what goes to the classifier for this screen, plus a table of every item."""
     targets = target_criteria(screen, browser, apps, clipboard_shared)
@@ -55,12 +64,12 @@ def render_payload(
         RULE,
         "STATE  (sent as `state`)",
         RULE,
-        json.dumps(base_state(goal, screen, items, history, tried, guidance), indent=2),
+        json.dumps(base_state(goal, screen, items, history, tried, guidance, listening), indent=2),
         "",
         RULE,
         "QUESTION kind  (Choice criteria)",
         RULE,
-        json.dumps(screen_kind_criteria(browser, email, screen, items, targets), indent=2),
+        json.dumps(screen_kind_criteria(browser, email, screen, items, targets, listening), indent=2),
         "",
         RULE,
         "QUESTION item  (Choice criteria)",

@@ -25,6 +25,7 @@ from typesafe_sdk import Noul
 from typesafe_computer_use import actions, runner
 from typesafe_computer_use.actions import Context
 from typesafe_computer_use.decide import CLICK_KINDS
+from typesafe_computer_use.goal import LiveGoal
 from typesafe_computer_use.models import AxNode, Field, Item, MenuItem, Screen, WindowRef
 from typesafe_computer_use.platform_adapter import desktop
 from typesafe_computer_use.runner import RunConfig, RunState, run
@@ -138,6 +139,9 @@ class World:
         self.page = self.pages[start or pages[0].name]
         self.typed: dict[str, str] = {}
         self.running: set[str] = set()  # the apps open, as the adapter's running_apps reports them
+        # Called before each capture with the world, the way speech lands between two steps of a
+        # dictated run: a scenario grows or finishes a LiveGoal here, keyed off `ticks`.
+        self.between: Callable[[World], None] | None = None
         self.log: list[str] = []
         self.mouse: list[tuple[float, float]] = []
         self.fake: FakeTypeSafe | None = None  # the classifier `drive` built, for fake.states
@@ -212,6 +216,8 @@ class World:
         Each capture is a tick, so a page whose rows are a callable can move between steps without
         moving inside one: every other read of the screen in the same step sees the same rows.
         """
+        if self.between is not None:
+            self.between(self)
         nodes = [
             AxNode(role="AXLink", label=lbl, x=0.0, y=OFFSCREEN_Y, w=120.0, h=32.0, pressable=True, ref=self._ref(f"press:{lbl}"))
             for lbl in self.page.offscreen
@@ -532,6 +538,7 @@ def drive(
     replies: list[str] | None = None,
     handoffs: int | None = None,
     apps: tuple[str, ...] = (),
+    live: LiveGoal | None = None,
 ) -> RunState:
     """Run the real loop against the world until it stops itself. `world.fake` holds the classifier.
 
@@ -564,4 +571,5 @@ def drive(
             ask=ask if replies is not None else None,
             apps=apps,
         ),
+        live=live,
     )

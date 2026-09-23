@@ -13,6 +13,8 @@ import json
 import pytest
 from world import FakeWriter, Page, World, drive, scripted
 
+from typesafe_computer_use.goal import LiveGoal
+
 GOAL = "buy a ticket to the next show"
 
 # The click point of row N, in screen points: the center of (100, 100+40N, 600, 130+40N) halved.
@@ -1876,3 +1878,74 @@ def test_l61_nothing_is_offered_that_would_put_text_into_a_password_field(monkey
     assert list(offered["menu"].criteria.values()) == ["View ▸ Actual Size"]  # no paste from the menu either
     assert world.fake.states[0]["focused_field"]["current_value"] == ""  # and its value never reaches the classifier
     assert state.history == [] and world.log == []
+
+
+# ------------------------------------------------------------------ a goal still being spoken
+
+
+def test_l62_a_dictated_goal_grows_mid_run_and_the_loop_waits_for_the_rest(monkeypatch, tmp_path):
+    """Listen and go: the loop starts on the first sentence while the user is still talking.
+
+    Twice the classifier would stop, once because everything said so far is done and once again
+    after the second sentence is done, and both times the run holds, since the user has not
+    finished. Whisper rewrites what it heard as more arrives, so the goal is replaced whole each
+    time, never appended: "Then" becomes "Then write a summary.", not "Then Then write a summary.".
+    """
+    live = LiveGoal("Open the notes app. Then", listening=True)
+
+    def speech(world: World) -> None:
+        if world.ticks == 2:
+            live.set("Open the notes app. Then write a summary.")
+        if world.ticks == 4:
+            live.finish()
+
+    world = World(
+        [
+            Page(name="desktop", app="Finder", items=["Desktop"], on={"activate:Notes": "notes"}),
+            Page(name="notes", app="Notes", items=["All iCloud", "Body"], field="Body"),
+        ]
+    )
+    world.between = speech
+
+    def policy(state: dict, questions: dict):
+        if state["frontmost_app"] == "Finder":
+            return ("open_app", "Notes")
+        if "summary" in state["goal"] and not state["focused_field"]["current_value"]:
+            return ("type_text", None)
+        return ("done", None)
+
+    writer = FakeWriter(text="Notes: a short summary.")
+    state = drive(
+        world,
+        policy,
+        goal=live.text,
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+        writer=writer,
+        apps=("Finder", "Google Chrome", "Notes"),
+        live=live,
+    )
+
+    assert state.outcome == "done"
+    assert state.history[0] == "opened Notes" and state.history[1].startswith("typed 'Notes: a short summary.' into 'Body'")
+    assert len(state.history) == 2 and state.holds == 2  # two stops became waits, and neither used up a step
+    assert world.typed["Body"] == "Notes: a short summary."
+    speaking = [s.get("the_user_is_still_speaking_this_goal", False) for s in world.fake.states]
+    assert speaking == [True, True, True, True, False]
+    assert world.fake.states[2]["goal"] == "Open the notes app. Then write a summary."  # replaced, not appended
+    assert "so far" in world.fake.asked[1]["kind"].criteria["done"]  # done means what has been said, while listening
+    fill = next(r for r in writer.requests if "fill" in r["output_config"]["format"]["schema"]["properties"])
+    assert json.loads(fill["messages"][0]["content"][-1]["text"])["goal"] == "Open the notes app. Then write a summary."
+    summary = json.loads((tmp_path / "run" / "run.json").read_text())
+    assert summary["goal"] == "Open the notes app. Then write a summary."
+    assert sorted(p.name for p in (tmp_path / "run").glob("step-*-raw.png")) == [f"step-00{n}-raw.png" for n in range(1, 6)]
+
+
+def test_l63_a_goal_that_stops_being_spoken_ends_as_any_other_run(monkeypatch, tmp_path):
+    live = LiveGoal("Open the notes app.", listening=False)
+    world = World([Page(name="notes", app="Notes", items=["New Note"])])
+
+    state = drive(world, scripted(("done", None)), goal=live.text, monkeypatch=monkeypatch, tmp_path=tmp_path, live=live)
+
+    assert state.outcome == "done" and state.holds == 0
+    assert "the_user_is_still_speaking_this_goal" not in world.fake.states[0]
