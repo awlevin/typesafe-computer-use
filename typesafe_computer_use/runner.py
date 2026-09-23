@@ -429,7 +429,7 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     timing["total"] = round(time.perf_counter() - started, 3)
     state.timings.append(timing)
     if state.hooks.on_step is not None:
-        item = by_index.get(decision.chosen.rpartition(":")[2]) if decision.clicking else None
+        item = by_index.get(decision.item_key) if decision.item_key is not None else None
         state.hooks.on_step(
             StepEvent(
                 step=step,

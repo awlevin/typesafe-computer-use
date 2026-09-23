@@ -331,3 +331,20 @@ def test_a_control_on_a_second_display_lands_on_its_capture(screen):
     node = AxNode(role="AXButton", label="Share", x=-900.0, y=50.0, w=40.0, h=20.0, pressable=True)
     [item] = perception.to_ax_items([node], left)
     assert (item.x1, item.y1, item.x2, item.y2) == (200.0, 100.0, 280.0, 140.0)
+
+
+def test_the_annotated_capture_marks_the_clicked_item_and_never_an_off_screen_ones_namesake(screen, tmp_path):
+    from PIL import Image
+
+    from typesafe_computer_use.report import annotate
+
+    items = [Item(i, f"row {i}", 1.0, 100.0, 100.0 + 60 * i, 300.0, 140.0 + 60 * i) for i in range(4)]
+
+    def red_boxes(chosen: str) -> int:
+        out = tmp_path / f"{chosen.replace(':', '-')}.png"
+        annotate(screen, items, chosen, out)
+        pixels = Image.open(out).convert("RGB")
+        return sum(1 for it in items if pixels.getpixel((int(it.x1), int(it.y1) + 5)) == (255, 0, 0))
+
+    assert red_boxes("3") == 1 and red_boxes("double:3") == 1 and red_boxes("right:3") == 1
+    assert red_boxes("offscreen:3") == 0  # a hidden control is not the fourth row

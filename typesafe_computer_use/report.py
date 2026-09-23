@@ -8,7 +8,16 @@ from pathlib import Path
 
 from PIL import ImageDraw, ImageFont
 
-from .decide import base_state, item_criteria, offscreen_criteria, screen_kind_criteria, site_criteria, target_criteria
+from .decide import (
+    DOUBLE_PREFIX,
+    RIGHT_PREFIX,
+    base_state,
+    item_criteria,
+    offscreen_criteria,
+    screen_kind_criteria,
+    site_criteria,
+    target_criteria,
+)
 from .models import Guidance, Item, Screen
 
 FONT_PATH = "/System/Library/Fonts/Helvetica.ttc"
@@ -128,7 +137,7 @@ def annotate(screen: Screen, items: list[Item], chosen: str, out: Path) -> None:
     except OSError:
         font = ImageFont.load_default()
     for it in items:
-        hit = chosen.rpartition(":")[2] == str(it.index)  # a double or right click names its item after a prefix
+        hit = str(it.index) in (chosen, chosen.removeprefix(DOUBLE_PREFIX), chosen.removeprefix(RIGHT_PREFIX))
         color = (255, 0, 0) if hit else (255, 140, 0) if it.from_ax else (0, 160, 255)
         draw.rectangle((it.x1, it.y1, it.x2, it.y2), outline=color, width=3 if hit else 1)
         draw.text((it.x1, max(0, it.y1 - 12 * screen.scale)), str(it.index), fill=color, font=font)

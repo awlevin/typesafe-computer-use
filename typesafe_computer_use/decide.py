@@ -374,6 +374,11 @@ class Decision:
         return self.kind.choice in CLICK_KINDS and self.item is not None
 
     @property
+    def item_key(self) -> str | None:
+        """The item a click of any kind lands on, by its key; None when no item is clicked."""
+        return self.item.choice if self.clicking else None
+
+    @property
     def target(self) -> ChoiceAnswer | None:
         """The answer that names what a key, menu or window action acts on, when this is one."""
         return {"press_key": self.key, "press_menu": self.menu, "focus_window": self.window}.get(self.kind.choice)
