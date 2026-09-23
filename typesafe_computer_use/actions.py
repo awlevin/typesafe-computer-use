@@ -21,6 +21,7 @@ from .decide import (
     verify_typed,
     windows_offered,
 )
+from .labels import Labeller
 from .models import Field, Guidance, Item, Missed, Screen
 from .platform_adapter import desktop
 from .writer import Writer, WriterError, compose_text, compose_url, credential_field
@@ -40,6 +41,7 @@ class Context:
     ask: Callable[[str], str] | None = None  # puts the writer's question to the user; None when nobody is there to answer
     answerer: Writer | None = None  # reads the screen when the classifier stops; None leaves it to the writer
     apps: tuple[str, ...] = ()  # the applications open_app may bring up, read once per run
+    labeller: Labeller | None = None  # names icon-only controls with the answer's model, when the user asked for it
     guidance: Guidance = field(default_factory=Guidance)  # the runner replaces the context when the writer or the user adds to it
 
 

@@ -198,6 +198,9 @@ class Settings:
     # fields, never the clipboard. On, the classifier reads it every step, which is how text is
     # carried from one app to another.
     share_clipboard: bool = False
+    # Off unless turned on: each new layout with unlabelled icons costs a writer request that reads
+    # an image, and moves work from the classifier's share of the calls to the writer's.
+    name_icons: bool = False
     # API keys typed into the app, by environment variable name. One key serves every endpoint that
     # names it, so a key entered once is a key the writer, the answer and the classifier all have.
     keys: dict[str, str] = field(default_factory=dict)
@@ -294,8 +297,9 @@ def from_dict(raw: dict) -> Settings:
     for name in ("browser", "email"):
         if isinstance(raw.get(name), str):
             setattr(settings, name, raw[name])
-    if isinstance(raw.get("share_clipboard"), bool):
-        settings.share_clipboard = raw["share_clipboard"]
+    for name in ("share_clipboard", "name_icons"):
+        if isinstance(raw.get(name), bool):
+            setattr(settings, name, raw[name])
     return settings
 
 

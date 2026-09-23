@@ -76,11 +76,17 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="show the classifier the clipboard's text each step, to carry text between apps (off by default: it may hold a password)",
     )
+    parser.add_argument(
+        "--name-icons",
+        action="store_true",
+        help="have the answer's model name icon-only controls, once per layout (a writer call each; needs a model that reads images)",
+    )
     _provider_flags(parser)
     args = parser.parse_args(argv)
 
     config.load_dotenv(DOTENV)
     settings = apply_provider_flags(load_settings(), args)
+    settings.name_icons = settings.name_icons or args.name_icons
     if args.act and not desktop.accessibility_trusted():
         sys.exit("this terminal lacks Accessibility permission; grant it in System Settings > Privacy & Security")
     try:

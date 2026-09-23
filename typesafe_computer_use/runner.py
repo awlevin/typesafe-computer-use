@@ -265,13 +265,21 @@ def earlier_screens(state: RunState, final: Signature, budget: int = EARLIER_LIN
     return [{"app": app, "url": url, "text": [text for text, _ in lines]} for app, url, _, lines in reversed(out)]
 
 
+def icon_namer(ctx: Context):
+    """The labeller bound to the metered writer that reads images, so each naming is counted as the writer's."""
+    reader = ctx.answerer or ctx.writer
+    if ctx.labeller is None or reader is None:
+        return None
+    return lambda screen, nodes: ctx.labeller(reader, screen, nodes)
+
+
 def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log) -> bool:
     desktop.check_abort()
     timing: dict[str, float] = {}
     started = time.perf_counter()
     with phase(timing, "capture"):
         screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser, timing, cfg.clipboard)
-    items = perceive(screen, MAX_OPTIONS, cfg.goal, timing, None if cfg.replay else state.ocr_cache)
+    items = perceive(screen, MAX_OPTIONS, cfg.goal, timing, None if cfg.replay else state.ocr_cache, icon_namer(ctx))
     state.view = (screen, items)
     if not screen_moved(state, screen, items, log):
         return False

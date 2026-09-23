@@ -16,10 +16,11 @@ from typesafe_sdk import TypeSafeClient
 from .actions import Context
 from .apps import resolve_app
 from .chat_classifier import ChatClassifier
+from .labels import Labeller
 from .openai_writer import OpenAIWriter
 from .platform_adapter import desktop
 from .settings import ANTHROPIC, DECISION_PROVIDERS, TEXT_PROVIDERS, TYPESAFE, Endpoint, ProviderSpec, Settings, SettingsError
-from .writer import Configured, Writer, client_for, make_writer, provider
+from .writer import Configured, Writer, client_for, make_writer, provider, reads_images
 
 CODESTRAL = "codestral"  # Mistral lists it with eyes; it has none
 
@@ -67,6 +68,8 @@ def build(settings: Settings) -> Services:
     reader = answerer or writer
     if isinstance(reader, Configured) and not reader.vision:
         notes.append(f"{reader.label} does not read images: the answer gets the screen's text only, and icons stay nameless")
+    elif settings.name_icons and reader is not None and reads_images(reader):
+        notes.append("icons with no label are named by the answer's model, once per layout; each naming is a writer call")
     return Services(classifier=classifier, classifier_label=label, writer=writer, answerer=answerer, notes=tuple(notes))
 
 
@@ -119,6 +122,7 @@ def context_factory(settings: Settings, goal: str, services: Services, ask: Call
     """
     apps = tuple(desktop.installed_apps())
     browser = resolve_app(settings.resolved_browser(), apps)
+    reader = services.answerer or services.writer
 
     def factory(typesafe, history: list[str]) -> Context:
         return Context(
@@ -131,6 +135,7 @@ def context_factory(settings: Settings, goal: str, services: Services, ask: Call
             history=history,
             ask=ask,
             apps=apps,
+            labeller=Labeller() if settings.name_icons and reader is not None and reads_images(reader) else None,
         )
 
     return factory

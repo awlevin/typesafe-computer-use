@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -124,6 +125,7 @@ def perceive(
     goal: str,
     timing: dict[str, float] | None = None,
     cache: OcrCache | None = None,
+    name_icons: Callable[[Screen, list[AxNode]], list[AxNode]] | None = None,
 ) -> list[Item]:
     """Everything worth clicking on this screen: OCR text blocks, plus the app's own controls.
 
@@ -136,11 +138,18 @@ def perceive(
 
     A `cache` carries the previous capture's OCR, so only the tiles that changed are read again.
     Pass None to read the whole region every time, which is what a replay and an inspection do.
+
+    `name_icons` is handed the controls that have no label at all and returns the ones it could
+    name, which join the rest. Without it they are never looked for, as before it existed.
     """
     with phase(timing, "ocr"):
         blocks = ocr(screen, budget, goal, cache, timing)
     with phase(timing, "ax"):
         nodes, hidden = ax_nodes(screen, budget)
+    if name_icons is not None and screen.pid is not None:
+        with phase(timing, "icons"):
+            nodes = nodes + name_icons(screen, nameless_nodes(screen))[: max(0, budget - len(nodes))]
+    with phase(timing, "ax"):
         controls = to_ax_items(nodes, screen)
     merged = merge_with_origins(blocks, controls, budget)
     screen.ax_refs.clear()
@@ -490,6 +499,15 @@ def ax_nodes(screen: Screen, budget: int) -> tuple[list[AxNode], list[AxNode]]:
     except Exception:
         return [], []
     return [node for node in nodes[:budget] if node.label], [node for node in hidden if node.label]
+
+
+def nameless_nodes(screen: Screen) -> list[AxNode]:
+    """The frontmost app's visible pressable controls with no label, in screen points; none on any failure."""
+    width_pt, height_pt = screen.size_pt
+    try:
+        return desktop.nameless_elements(screen.pid, width_pt, height_pt)
+    except Exception:
+        return []
 
 
 def offscreen_controls(nodes: list[AxNode], items: list[Item]) -> list[AxNode]:

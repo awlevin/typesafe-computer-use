@@ -263,3 +263,27 @@ def test_a_flag_points_one_run_elsewhere_and_starts_the_provider_from_its_own_de
     apply_provider_flags(settings, flags)
 
     assert settings.writer == Endpoint(provider="groq") and settings.decisions.model == "jev-2"
+
+
+def test_icons_are_named_only_when_asked_for_and_only_by_a_model_that_reads_images(jev, monkeypatch):
+    from typesafe_computer_use.platform_adapter import desktop
+
+    monkeypatch.setattr(desktop, "installed_apps", lambda: ["Safari"])
+    monkeypatch.setenv("OPENAI_API_KEY", "o")
+    monkeypatch.setenv("MISTRAL_API_KEY", "m")
+
+    def labeller(**choices):
+        settings = Settings(**choices)
+        return session.context_factory(settings, "g", session.build(settings))(None, []).labeller
+
+    assert labeller(writer=Endpoint(provider="openai"), answer=Endpoint(provider="openai")) is None  # off by default
+    assert labeller(writer=Endpoint(provider="openai"), answer=Endpoint(provider="openai"), name_icons=True) is not None
+    assert labeller(writer=Endpoint(provider="mistral"), answer=Endpoint(provider="mistral"), name_icons=True) is None
+
+
+def test_the_clipboard_is_not_shared_unless_the_user_says_so(tmp_path):
+    assert Settings().share_clipboard is False
+    path = tmp_path / "settings.json"
+    Settings(share_clipboard=True, name_icons=True).save(path)
+    loaded = S.load(path)
+    assert loaded.share_clipboard and loaded.name_icons

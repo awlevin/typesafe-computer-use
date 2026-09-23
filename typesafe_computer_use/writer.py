@@ -194,7 +194,7 @@ def checked(data: dict, properties: dict) -> dict:
     for name, spec in properties.items():
         if spec["type"] == "string" and name not in out:
             out[name] = ""
-        if not isinstance(out.get(name), {"boolean": bool, "string": str}[spec["type"]]):
+        if not isinstance(out.get(name), {"boolean": bool, "string": str, "array": list}[spec["type"]]):
             raise WriterError(f"the writer's reply has no {spec['type']} {name!r}: {json.dumps(data)[:400]}")
     return out
 
@@ -248,6 +248,48 @@ def compose_text(
         max_tokens=256,
     )
     return data["text"].strip() if data["fill"] else ""
+
+
+ICON_SYSTEM = (
+    "Each red box on this crop of a screenshot is a control with no name of its own. For every numbered "
+    "box, say in two or three words what that control does, as a person would say it: 'close window', "
+    "'add a note', 'play', 'share'. Judge it from the icon and from what surrounds it. When you cannot "
+    "tell, give an empty name rather than a guess: a wrong name here becomes a wrong click."
+)
+
+
+def compose_icon_names(writer: Writer, app: str, roles: list[str], image: Image.Image) -> dict[int, str]:
+    """A short name for each numbered box on `image`, as far as the model can tell; the rest are left out.
+
+    Icon names are free text a click is chosen by, so they come from here like every other string the
+    loop acts on, and only numbers that were drawn can come back.
+    """
+    data = _structured(
+        writer,
+        system=ICON_SYSTEM,
+        packet={"app": app, "boxes": [{"box": i, "shape": role} for i, role in enumerate(roles)]},
+        properties={
+            "names": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"box": {"type": "integer"}, "name": {"type": "string"}},
+                    "required": ["box", "name"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        max_tokens=600,
+        model=answer_model(),
+        image=image,
+    )
+    named: dict[int, str] = {}
+    for entry in data["names"]:
+        index = entry.get("box") if isinstance(entry, dict) else None
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if isinstance(index, int) and 0 <= index < len(roles) and isinstance(name, str) and name.strip():
+            named[index] = " ".join(name.split())[:60]
+    return named
 
 
 def valid_url(url: str) -> bool:
