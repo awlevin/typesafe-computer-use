@@ -186,6 +186,54 @@ class Endpoint:
         return _env(spec.key_env) or stored.strip() or self.api_key.strip() or None
 
 
+# Control-Option-D by default: two modifiers, so it is not typed by accident, and a chord macOS
+# itself does not use. Command-Space and Option-Space are Spotlight and the input-source switcher.
+DEFAULT_SHORTCUT_KEY = 2  # the virtual key code for D
+
+
+@dataclass
+class Shortcut:
+    """The chord that starts and stops dictation from anywhere. Stored as the key's code, so any layout works."""
+
+    key_code: int = DEFAULT_SHORTCUT_KEY
+    character: str = "D"  # only for showing the chord to the user
+    command: bool = False
+    control: bool = True
+    option: bool = True
+    shift: bool = False
+    enabled: bool = True
+
+    @property
+    def modifiers(self) -> tuple[bool, bool, bool, bool]:
+        return self.command, self.control, self.option, self.shift
+
+    def describe(self) -> str:
+        """The chord as a Mac writes it: \u2303\u2325D."""
+        held = (("\u2303", self.control), ("\u2325", self.option), ("\u21e7", self.shift), ("\u2318", self.command))
+        return "".join(sign for sign, on in held if on) + self.character.upper()
+
+
+@dataclass
+class Voice:
+    """Local dictation. `model` is an MLX Whisper repo on Hugging Face, downloaded on first use."""
+
+    model: str = "mlx-community/whisper-large-v3-turbo"
+    language: str = ""  # empty lets Whisper detect it
+    append: bool = True  # add to what is already in the goal box instead of replacing it
+    shortcut: Shortcut = field(default_factory=Shortcut)
+
+
+@dataclass
+class RunDefaults:
+    """The window's run controls, as they were last left."""
+
+    act: bool = False
+    steps: int = 100
+    min_confidence: float = 0.4
+    delay: float = 2.0
+    hide_window: bool = True  # off the screen while it drives, so the window is not read as part of the screen
+
+
 @dataclass
 class Settings:
     decisions: Endpoint = field(default_factory=lambda: Endpoint(provider="typesafe"))
@@ -201,6 +249,8 @@ class Settings:
     # Off unless turned on: each new layout with unlabelled icons costs a writer request that reads
     # an image, and moves work from the classifier's share of the calls to the writer's.
     name_icons: bool = False
+    voice: Voice = field(default_factory=Voice)
+    run: RunDefaults = field(default_factory=RunDefaults)
     # API keys typed into the app, by environment variable name. One key serves every endpoint that
     # names it, so a key entered once is a key the writer, the answer and the classifier all have.
     keys: dict[str, str] = field(default_factory=dict)
@@ -292,8 +342,12 @@ def from_dict(raw: dict) -> Settings:
     for name, kind in _SECTIONS.items():
         section = raw.get(name)
         if isinstance(section, dict):
-            known = {k: v for k, v in section.items() if k in {f.name for f in fields(kind)}}
+            known = {k: v for k, v in section.items() if k in {f.name for f in fields(kind)} and k != "shortcut"}
             setattr(settings, name, replace(getattr(settings, name), **known))
+    voice = raw.get("voice")
+    if isinstance(voice, dict) and isinstance(voice.get("shortcut"), dict):
+        known = {k: v for k, v in voice["shortcut"].items() if k in {f.name for f in fields(Shortcut)}}
+        settings.voice.shortcut = replace(Shortcut(), **known)
     for name in ("browser", "email"):
         if isinstance(raw.get(name), str):
             setattr(settings, name, raw[name])
@@ -303,7 +357,7 @@ def from_dict(raw: dict) -> Settings:
     return settings
 
 
-_SECTIONS: dict[str, type] = {"decisions": Endpoint, "writer": Endpoint, "answer": Endpoint}
+_SECTIONS: dict[str, type] = {"decisions": Endpoint, "writer": Endpoint, "answer": Endpoint, "voice": Voice, "run": RunDefaults}
 
 
 def default_settings() -> Settings:

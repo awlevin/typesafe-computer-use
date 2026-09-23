@@ -7,7 +7,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from conftest import REAL_ACCESSIBILITY
+from conftest import REAL_ACCESSIBILITY, REAL_APPKIT
 
 from typesafe_computer_use import macos, windows
 from typesafe_computer_use.browser import cdp
@@ -115,3 +115,36 @@ def test_a_server_the_test_started_on_loopback_is_still_reachable():
         server.listen(1)
         with socket.create_connection(server.getsockname(), timeout=1):
             pass
+
+
+# ------------------------------------------------------------- the macOS window
+@pytest.mark.skipif(not REAL_APPKIT, reason="the window exists only where AppKit does")
+@pytest.mark.parametrize(
+    "touch",
+    [
+        "the microphone",
+        "the microphone permission prompt",
+        "the global key monitor",
+        "a system sound",
+        "the red dot",
+        "a window on the screen",
+        "a modal alert",
+        "hiding the app",
+    ],
+)
+def test_no_window_microphone_key_monitor_or_sound_is_reachable(touch):
+    from typesafe_computer_use.gui import app, audio, hotkey, overlay, sounds, widgets
+    from typesafe_computer_use.settings import Shortcut
+
+    calls = {
+        "the microphone": lambda: audio.Recorder().start(),
+        "the microphone permission prompt": audio.request_permission,
+        "the global key monitor": lambda: hotkey.Hotkey(lambda: None).start(Shortcut()),
+        "a system sound": sounds.started,
+        "the red dot": lambda: overlay.Dot().show(),
+        "a window on the screen": lambda: widgets.present(object()),
+        "a modal alert": lambda: widgets.alert("title", "message"),
+        "hiding the app": lambda: app._app_visibility("hide"),
+    }
+    with pytest.raises(RuntimeError, match="real machine"):
+        calls[touch]()

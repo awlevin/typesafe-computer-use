@@ -45,6 +45,7 @@ def _stub(name: str) -> types.ModuleType:
 
 
 REAL_ACCESSIBILITY = not _absent("ApplicationServices")
+REAL_APPKIT = not _absent("AppKit")  # the macOS window can only be imported, and guarded, where AppKit is
 
 if _absent("Quartz"):
     _stub("Quartz").kCGHIDEventTap = 0
@@ -104,6 +105,26 @@ def no_real_machine(monkeypatch):
     for name in (*windows_calls, "raise_window", "clipboard_text"):
         monkeypatch.setattr(windows, name, refuse(f"windows.{name}"))
     monkeypatch.setattr(windows, "mouse_location", lambda: (500.0, 500.0))
+
+    # The window, where AppKit exists: the microphone and its permission prompt, the global key
+    # monitor (it sees keystrokes typed into other apps), system sounds, any window put on the
+    # screen or modal alert, and hiding or raising the app, each of which takes the screen from
+    # whoever is using it.
+    if REAL_APPKIT:
+        from typesafe_computer_use.gui import app as gui_app
+        from typesafe_computer_use.gui import audio, hotkey, sounds, widgets
+
+        for module, name in (
+            (audio, "_open_recorder"),
+            (audio, "request_permission"),
+            (hotkey, "_add_monitors"),
+            (sounds, "_play"),
+            (widgets, "present"),
+            (widgets, "alert"),
+            (widgets, "confirm"),
+            (gui_app, "_app_visibility"),
+        ):
+            monkeypatch.setattr(module, name, refuse(f"{module.__name__.rpartition('.')[2]}.{name}"))
 
     # The browser backend: no Chrome and no process of any kind, nothing over CDP, and no
     # connection except to a server on this machine that the test started itself.

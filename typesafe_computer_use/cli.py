@@ -1,4 +1,4 @@
-"""Command-line entry points: `clicker` and `clicker-inspect`."""
+"""Command-line entry points: `clicker`, `clicker-inspect`, and `clicker-gui`."""
 
 from __future__ import annotations
 
@@ -115,6 +115,19 @@ def main(argv: list[str] | None = None) -> None:
     state = run(cfg, ctx_factory, services.classifier)
     if state.outcome.startswith("aborted"):
         sys.exit(130)
+
+
+def gui(argv: list[str] | None = None) -> None:
+    """Open the window, macOS only. A run from it is the same loop `clicker` drives."""
+    parser = argparse.ArgumentParser(prog="clicker-gui", description="The window for typesafe-computer-use (macOS).")
+    parser.add_argument("goal", nargs="?", default="", help="pre-fill the goal box")
+    args = parser.parse_args(argv)
+    if sys.platform != "darwin":
+        sys.exit("clicker-gui is a macOS window; on this system, use clicker")
+    config.load_dotenv(DOTENV)
+    from .gui.app import launch
+
+    launch(args.goal)
 
 
 def inspect(argv: list[str] | None = None) -> None:
