@@ -107,7 +107,41 @@ CLICKER_ANSWER_MODEL=deepseek-v4.1-flash
 CLICKER_WRITER_VISION=false
 ```
 
-`.env` lives at the repo root and is read by every entry point (`clicker`, `clicker-inspect`).
+`.env` lives at the repo root and is read by every entry point (`clicker`, `clicker-inspect`,
+`clicker-gui`).
+
+### Providers and the settings file
+
+The three requests a run makes, the classifier's, the writer's and the answer's, can each be
+pointed at a provider of its own: from the window's Settings, by editing
+`~/.config/typesafe-computer-use/settings.json` (written readable only by you, since it can hold
+keys), or for one run with `--classifier`, `--writer` and `--answer`, each with a `--*-model`.
+
+| provider | writer and answer | classifier | key |
+|---|---|---|---|
+| Anthropic | yes (the default) | | `ANTHROPIC_API_KEY` |
+| TypeSafe (jev) | | yes (the default) | `TYPESAFE_API_KEY` |
+| Vercel AI Gateway | yes | yes | `AI_GATEWAY_API_KEY` |
+| OpenAI | yes | yes | `OPENAI_API_KEY` |
+| OpenRouter | yes | yes | `OPENROUTER_API_KEY` |
+| Mistral | yes, text only | | `MISTRAL_API_KEY` |
+| xAI | yes | | `XAI_API_KEY` |
+| Groq | yes, text only | | `GROQ_API_KEY` |
+| Ollama | yes, text only | yes | none |
+| custom | yes, any Chat Completions URL | yes, `CLICKER_CLASSIFIER_BASE_URL` | `CLICKER_WRITER_API_KEY`, `CLICKER_CLASSIFIER_API_KEY` |
+
+Every one but Anthropic and TypeSafe is reached through the same Chat Completions client
+described above, with the same response-format fallback. The environment always wins: a key in
+the shell or `.env` beats one typed into the app, `CLICKER_WRITER_MODEL` and
+`CLICKER_ANSWER_MODEL` beat the file's models, and when `CLICKER_WRITER_BASE_URL` or
+`CLICKER_WRITER_API` is set, the writer and the answer go to that endpoint as described above,
+whatever the file says. With no file and nothing but `ANTHROPIC_API_KEY`, a run is exactly what
+it was. An Anthropic key typed into the app goes to `api.anthropic.com` and nowhere else.
+
+A classifier other than jev is a chat model asked the same questions through a JSON schema. It
+works, and it is slower and dearer, and its confidence is the model's own opinion of itself
+rather than a calibrated number, so `--min-confidence` means less with one. It is counted as the
+classifier on the `calls:` line. A label it was not offered is refused, never acted on.
 
 Grant your terminal **Screen Recording** and **Accessibility** in System Settings >
 Privacy & Security. Without the first, captures are wallpaper. Without the second,
@@ -132,7 +166,13 @@ No permission prompt is needed. What differs from macOS:
 - A click reads the cursor back first, and refuses to press, ending the run, when the cursor did
   not reach the target (a UAC prompt or the lock screen has the input).
 - The browser URL is read off the address bar, which Chrome and Edge show without the scheme.
-- Only the primary monitor is captured. Command-[ (back) is Alt-Left.
+- The monitor holding the front window is captured. Command-[ and Command-] (back and forward)
+  are Alt-Left and Alt-Right, and Command-Up and Command-Down are Control-Home and Control-End.
+- `press_menu` is never offered: UI Automation lists a menu only once it is open on screen.
+- `open_app` offers only apps that already have a window, since an app is brought forward
+  through its window and nothing here launches one by name.
+- The window and dictation are macOS only. `clicker` with every flag, the providers and the
+  settings file work the same.
 - When a policy blocks the installed `clicker.exe`, run `uv run python -m typesafe_computer_use`
   with the same arguments, or `... typesafe_computer_use inspect` for `clicker-inspect`.
 
@@ -144,6 +184,9 @@ uv run clicker "open the Playground" --act           # drives the machine, up to
 uv run clicker "log in" --act --steps 20 --delay 3   # longer and slower
 uv run clicker "log in" --act --handoffs 0           # the classifier alone: its first stop ends the run
 uv run clicker-inspect "any goal"                    # 3-2-1, capture, open the annotated screen + payload
+uv run clicker "carry the total into Numbers" --act --share-clipboard   # the classifier reads the clipboard
+uv run clicker "archive the thread" --act --name-icons                  # name icon-only buttons (below)
+uv run clicker-gui                                   # the window (macOS; below)
 ```
 
 Clear the terminal first. It is on screen, so its text is OCR input.
@@ -200,6 +243,32 @@ calls: classifier 14 (82%, 3.9s)  writer 3 (18%, 21.4s)  handoffs 1  questions 0
 The classifier's share is the number the design stands on. A task it falls on is a
 task the writer had to steer at every turn, and the fix belongs in the state the
 classifier reads, not in more hand-offs.
+
+## The window, and dictation (macOS)
+
+`clicker-gui` opens a window over the same loop: a goal box, the run controls `clicker` takes,
+each step's log line and annotated capture as it happens, the answer, a Stop that is looked at
+before every step and every quarter second of a wait, and sheets for the providers and the API keys, where every model
+menu is filled by asking the provider what it serves. While a run acts, the window hides itself,
+since it would otherwise be read as part of the screen, and it comes back when the run ends. The
+Dock icon brings it back mid-run. Give the app, or the terminal it starts from, the same Screen
+Recording and Accessibility permission `clicker` needs.
+
+Dictation runs Whisper on the Mac through MLX, and the audio never leaves it. It is an extra,
+Apple Silicon only, since MLX is heavy: `uv sync --extra voice`. The model downloads on first use.
+
+- **Dictate** records until pressed again, then puts what was said in the goal box.
+- **Listen & go** starts the run on the first finished sentence and keeps listening. The growing
+  recording is transcribed again every second and a half, and the goal is replaced with the whole
+  transcript each time, never appended to: Whisper rewrites what it heard as more arrives, so
+  "then..." becomes "then write a summary." rather than both. While you are still talking, a
+  classifier that says `done` or `none`, or is under the confidence floor, holds the run instead
+  of ending it; the hold costs no step, and the classifier is told the goal is still arriving.
+  Stopping the listening lets the run finish.
+
+Control-Option-D starts and stops either from any app (record another chord in Settings); a red
+dot in the top right and a system sound say the microphone is live. macOS delivers that chord to
+the app only with Accessibility permission.
 
 ## Browser backend: DOM perception, no OCR
 
@@ -302,6 +371,8 @@ accessibility ─► actionable elements (role, label, frame), pruned to the dis
                      │
 accessibility ─► focused field (role, label, placeholder, value, frame)
 AppleScript   ─► frontmost app and pid, active tab URL
+accessibility ─► the menu bar's enabled commands, the app's titled windows
+workspace     ─► the running apps; the clipboard, only when shared
 clock         ─► local date and time
 dates.py      ─► "dated 2026-10-13 (in 27 days)" on any block containing a date,
                  "near a line dated ..." on its neighbours
@@ -309,12 +380,16 @@ layout        ─► "in the row of ..." on any label that appears more than onc
 runner.py     ─► the actions already tried on this same screen, each of which led back here
                      │
                      ▼
-        one TypeSafe request, three Choices, four with off-screen controls
+        one TypeSafe request, four Choices, and one more for each of these on offer
         ┌────────────────────────────────────────────────────────────┐
         │ kind      : click_item | use_browser | type_text | scroll… │
-        │ item      : which item (used only for click_item)          │
+        │ item      : which item (click, double or right click)      │
         │ site      : which website (used only for use_browser)      │
+        │ key       : which named shortcut (only for press_key)      │
         │ offscreen : which hidden control (only for press_offscreen)│
+        │ menu      : which menu command (only for press_menu)       │
+        │ window    : which other window (only for focus_window)     │
+        │ app       : which app (only for open_app)                  │
         └────────────────────────────────────────────────────────────┘
                      │
                      ▼
@@ -328,7 +403,7 @@ from a line of text. A label that appears more than once carries its row as well
 `'Buy' (middle-right; in the row of 'Coldplay', 'Oct 2')`, since the label says nothing
 about which and the layout does.
 
-Splitting the decision into three questions keeps screen noise out of the action
+Splitting the decision into questions keeps screen noise out of the action
 choice. Every stall found while building this came from two options that meant the
 same thing. Confidence measures concentration, so overlapping options always read as
 doubt. Keep the action set mutually exclusive.
@@ -405,9 +480,14 @@ on the app, and the node and time caps bind first on a big tree: Notes and Chrom
 |---|---|
 | `click_item` | press the element through the accessibility tree when the item came from it, so the press lands on the control rather than on whatever covers it; a mouse click at the center of the box otherwise, and as the fallback when the press is refused |
 | `press_offscreen` | `AXPress` a labelled control the app exposes but does not show, chosen from the off-screen list; offered only when that list is not empty, and a refusal counts as a no-op since there is no pixel to fall back on |
-| `use_browser` | go to the browser, showing the website the `site` answer names: `none` brings it forward on the page already open there, a `SITES` catalog key opens that URL through AppleScript `open location`, and `other` opens a URL the writer proposes |
-| `type_text` | the writer composes the string; it is set on the focused element through the accessibility tree, with keystrokes as the fallback when the value does not read back, and a TypeSafe Noul then checks the field's value |
-| `type_email` | fills in `$CLICKER_EMAIL` the same way; refused unless a text field is focused |
+| `double_click_item`, `right_click_item` | the item's pixel, twice or with the other button, never an accessibility press; a right click's context menu is items on the next step |
+| `use_browser` | go to the browser, showing the website the `site` answer names: `none` brings it forward on the page already open there, a `SITES` catalog key opens that URL with `open -a`, the URL an argument and never spliced into a script, and `other` opens a URL the writer proposes |
+| `open_app` | bring up an app by name, launching it if it is not running, chosen from the apps on this machine, running ones first; never the browser, which is `use_browser`'s, nor the app already in front |
+| `press_menu` | run a command of the frontmost app's menu bar through accessibility, without the menu opening; a command whose shortcut a named key sends is left to the key, and nothing that fills in a saved password is offered |
+| `focus_window` | raise another titled window of the frontmost app; the one in front is not on offer |
+| `press_key` | a named shortcut: save, undo, redo, copy, cut, paste, select all, find, new, new tab, close, forward, reload, the arrows, Tab, top and bottom, zoom. Back is `go_back` and a page at a time is `scroll_down`, so neither is here; paste is never offered into a credential field, nor pressed there if asked |
+| `type_text` | the writer composes the string; it is set on the focused element through the accessibility tree, with keystrokes as the fallback when the value does not read back, and a TypeSafe Noul then checks the field's value. Offered only while a text field that is not a credential field has the focus |
+| `type_email` | fills in `$CLICKER_EMAIL` the same way, on the same terms |
 | `press_enter`, `press_escape` | keyboard |
 | `go_back` | Cmd-[, the browser's Back, when the last click led somewhere unhelpful |
 | `scroll_down`, `scroll_up` | 10 lines, after parking the cursor over the frontmost window |
@@ -416,13 +496,16 @@ on the app, and the node and time caps bind first on a big tree: Notes and Chrom
 
 ### Where free text comes from
 
-The classifier never generates text. The writer model runs in three places, each with a
-small packet and a structured reply. Each packet also carries the current focus and what
+The classifier never generates text. The writer model runs in three places, a fourth with
+`--name-icons`, each with a small packet and a structured reply. Each packet also carries the current focus and what
 the user said, once there are any:
 
 - **`type_text`** receives the goal, recent actions, the focused field's label and
-  placeholder, and the OCR lines near the field. It returns `{fill, text}`. Credential
-  fields come back `fill: false` and nothing is typed. The text is set as the field's
+  placeholder, and the OCR lines near the field. It returns `{fill, text}`. A credential
+  field is refused before the writer is asked: one the platform marks secure
+  (`AXSecureTextField`, UI Automation's `IsPassword`), or one whose label or placeholder names a
+  credential, the same hints the browser backend uses. The model is also told to answer
+  `fill: false` for one; that is the second line, not the first. The text is set as the field's
   value where the element accepts one; otherwise the field is emptied and the text
   typed, since keystrokes land after whatever it already holds. After typing, a Noul
   scores whether the field now holds a sensible value. Under 0.5 the field gets back
@@ -443,8 +526,21 @@ the user said, once there are any:
   screen is captured again first. This one call uses `CLICKER_ANSWER_MODEL`, a stronger
   reader than the per-step writer.
 
-Passwords are never typed. Rely on the browser's password manager or an SSO button
-the OCR can read.
+- **Icon names**, with `--name-icons` or the setting. A pressable control with no label of any
+  kind is invisible to OCR and nameless in the tree. Those on screen are boxed and numbered on a
+  crop of their corner of the capture, and one request to the answer's model names them; a name
+  joins the items and is pressed through its element. A layout is named once per run, a failure
+  costs the icons and never the step, and each naming counts as the writer's on the `calls:`
+  line, which is why it is off by default. It needs a model that reads images.
+
+Passwords are never typed, or pasted. Rely on the browser's password manager or an SSO button
+the OCR can read. The value of a secure field never reaches the classifier.
+
+**The clipboard** reaches the classifier only with `--share-clipboard` or the setting, up to 500
+characters a step, so a `copy` in one app and a `paste` in another can carry text between them.
+It is off by default because the clipboard holds whatever was copied last, a password from a
+password manager included, and no field label says so: the credential guard sees fields, never
+the clipboard.
 
 ## Run folder
 
@@ -458,7 +554,10 @@ Every run writes `runs/<timestamp>/` so a stall can be replayed and fixed offlin
 | `step-NNN-raw.png` | the capture |
 | `step-NNN.png` | items numbered in blue, accessibility ones orange, the chosen one red, the focused field green |
 | `step-NNN-payload.txt` | the exact `state` and criteria sent to TypeSafe, then every item with source, role, box, click point, confidence, then the off-screen controls |
-| `step-NNN-answers.json` | every probability the classifier returned, the off-screen controls it was offered, the actions already tried on that screen, the idle and repeat counts the stop rules stood at, plus `timing` for that step |
+| `step-NNN-answers.json` | every probability the classifier returned, the off-screen controls it was offered, the key, menu command, window or app it named and the menu it was offered, the actions already tried on that screen, the idle and repeat counts the stop rules stood at, plus `timing` for that step |
+
+A step that held for more of a dictated goal writes its files too, and the steps after it are
+numbered past them.
 
 Each step also logs what it cost, so a slow phase is obvious:
 
@@ -481,6 +580,7 @@ typesafe_computer_use/
   platform_adapter.py
                   `desktop`, the one way to the platform: windows.py on Windows,
                   macos.py everywhere else; `Desktop` names what both provide
+  apps.py         which installed app a name means, platform-free
   macos.py        the macOS adapter: Quartz, AX, AppleScript, Vision OCR
   windows.py      the Windows adapter (experimental): UI Automation, SendInput,
                   Windows.Media.Ocr
@@ -493,13 +593,24 @@ typesafe_computer_use/
   writer.py       the writer model, structured replies, URL validation, the answer
                   with its focus or question
   openai_writer.py the writer's requests on an OpenAI-compatible endpoint
+  chat_classifier.py
+                  the classifier's questions asked of a chat model, for an endpoint
+                  that does not serve jev
+  settings.py     the provider catalog and the settings file
+  session.py      settings into the services one run needs, for the CLI and the window
+  labels.py       naming icon-only controls, once per layout
+  goal.py         a goal still being dictated while the loop works on it
+  voice.py        Whisper through MLX: a growing recording into settled sentences
   actions.py      one handler per action, each returning a history line
   runner.py       the step loop, run folder, stop rules, the hand-off to the writer
                   and back
   calls.py        requests counted per model, at the two clients
   report.py       logging, annotated screenshots, payload dump
   timing.py       phase stopwatches, the timing line, run summary
-  cli.py          `clicker` and `clicker-inspect`
+  cli.py          `clicker`, `clicker-inspect` and `clicker-gui`
+  gui/            the macOS window (AppKit), dictation, the microphone, the
+                  dictation chord; it reaches the machine being driven only
+                  through `desktop`
   browser/        the browser backend (see above), opt-in and independent of macos.py
     cdp.py        the only module that touches the browser        (platform adapter)
     perceive.py   DOM collection: ordered elements, click points, occlusion
@@ -532,11 +643,16 @@ still wants the OCR path.
   In a terminal, a canvas, or Spotify, an icon-only button reaches neither source.
 - Two identical labels in one row, or in no row at all, get only a coarse region hint and
   split the vote. Ones in different rows are told apart by the text beside them.
-- Only the main display is captured.
+- One display is captured each step: the one holding the front window.
 - A repeated action whose effect never shows on screen (a third "New note" in an app that
   lists nothing) reads as a cycle and stops the run: the capture is the only witness.
 - Using the machine during an `--act` run fights it for focus and the cursor.
 - The site catalog is small on purpose; the writer covers the rest.
+- A menu command is left out when a named key sends its shortcut; one whose shortcut the menu
+  shows as a glyph rather than a character (an arrow, Delete) is offered anyway, beside its key.
+- Mistral is reached through its OpenAI-compatible endpoint rather than its own SDK. Its
+  response-format handling is the fallback's, and it has not been run against the live API
+  since the switch.
 - Stacked short lines merge into one item, so a list of checkboxes ("Arrives in 2-4
   days", "Free Shipping", "Local Pickup") that the app does not publish through
   accessibility is one click target, aimed at its middle.
