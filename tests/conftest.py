@@ -60,7 +60,7 @@ if _absent("ocrmac"):
     _package.__path__ = []
     _package.ocrmac = _stub("ocrmac.ocrmac")
     _package.ocrmac.OCR = _OCR
-for _windows_module in ("psutil", "uiautomation", "win32api", "win32con", "win32gui", "win32process", "winocr"):
+for _windows_module in ("psutil", "uiautomation", "win32api", "win32clipboard", "win32con", "win32gui", "win32process", "winocr"):
     if _absent(_windows_module):
         _stub(_windows_module)
 
@@ -78,9 +78,10 @@ def no_real_machine(monkeypatch):
 
     The suite runs on the developer's own Mac, often while they use it. Every call that would
     move the pointer, press a key, run AppleScript (which opens apps and URLs), capture the
-    screen, open a file, or act on another app's accessibility element refuses here, so a test
-    that forgot to patch one fails instead of taking over the machine. A test that needs one
-    patches it itself, after this. The pointer reads as mid-screen, never the abort corner.
+    screen, open a file, launch or raise an app or window, read the clipboard, or act on another
+    app's accessibility element refuses here, so a test that forgot to patch one fails instead of
+    taking over the machine. A test that needs one patches it itself, after this. The pointer
+    reads as mid-screen, never the abort corner.
     """
 
     def refuse(what: str):
@@ -89,7 +90,9 @@ def no_real_machine(monkeypatch):
 
         return call
 
-    for name in ("_post", "osascript", "screenshot", "open_path"):
+    # `_launch` is `open -a`, which launches and raises apps and opens URLs; `_pasteboard` is the
+    # clipboard, whatever the user last copied.
+    for name in ("_post", "osascript", "screenshot", "open_path", "_launch", "_pasteboard"):
         monkeypatch.setattr(macos, name, refuse(f"macos.{name}"))
     monkeypatch.setattr(macos, "mouse_location", lambda: (500.0, 500.0))
     if REAL_ACCESSIBILITY:
@@ -97,7 +100,8 @@ def no_real_machine(monkeypatch):
             monkeypatch.setattr(macos.AS, name, refuse(f"ApplicationServices.{name}"))
     # The Windows adapter: SendInput and the cursor carry all input; the rest launch, activate,
     # open, capture, or act on another app's element.
-    for name in ("_send", "_move", "screenshot", "activate", "open_url", "open_path", "ax_press", "ax_focus", "ax_set_value"):
+    windows_calls = ("_send", "_move", "screenshot", "activate", "open_url", "open_path", "ax_press", "ax_focus", "ax_set_value")
+    for name in (*windows_calls, "raise_window", "clipboard_text"):
         monkeypatch.setattr(windows, name, refuse(f"windows.{name}"))
     monkeypatch.setattr(windows, "mouse_location", lambda: (500.0, 500.0))
 

@@ -28,6 +28,7 @@ dependencies = [
     "websocket-client==1.9.0",
     "ocrmac==1.0.1; sys_platform == 'darwin'",
     "pyobjc-framework-ApplicationServices==12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz==12.2.2; sys_platform == 'darwin'",
     "psutil==7.2.2; sys_platform == 'win32'",
     "pywin32==312; sys_platform == 'win32'",

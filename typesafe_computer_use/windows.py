@@ -24,6 +24,7 @@ from pathlib import Path
 import psutil
 import uiautomation as auto
 import win32api
+import win32clipboard
 import win32con
 import win32gui
 import win32process
@@ -32,7 +33,7 @@ from PIL import Image, ImageGrab
 
 from .ax_walk import AX_PRESS, AxAttrs, Frame, walk_actionable
 from .config import ABORT_CORNER_PX
-from .models import Abort, AxNode, Field, Missed
+from .models import Abort, AxNode, Field, MenuItem, Missed, WindowRef
 
 with suppress(AttributeError, OSError):  # pre-8.1 Windows without shcore, or awareness set by the host process
     ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
@@ -72,13 +73,25 @@ CONTROL_TYPE_TO_ROLE = {
 # The frontmost app is reported by the same name, so the classifier sees one browser, not two.
 BROWSER_EXES = {"Google Chrome": "chrome", "Microsoft Edge": "msedge", "Firefox": "firefox", "Brave Browser": "brave"}
 
-# Virtual keys for the keys the actions press. macOS's Command becomes Control, except Command-[,
-# a browser's Back, which is Alt-Left on Windows.
-VK = {"return": 0x0D, "tab": 0x09, "escape": 0x1B, "a": 0x41, "delete": 0x2E, "[": 0xDB, "left": 0x25}
+# Virtual keys for the keys the actions press. macOS's Command becomes Control, except where Windows
+# spells the gesture another way: Command-[ and Command-], a browser's Back and Forward, are Alt-Left
+# and Alt-Right, and Command-Up and Command-Down, the top and bottom of a document, are Control-Home
+# and Control-End.
+VK = {
+    "return": 0x0D, "tab": 0x09, "escape": 0x1B, "delete": 0x2E, "[": 0xDB, "]": 0xDD, "=": 0xBB, "-": 0xBD,
+    "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28, "home": 0x24, "end": 0x23,
+    **{letter: ord(letter.upper()) for letter in "acfnrstvwxz"},
+}  # fmt: skip
+VK_SHIFT = 0x10
 VK_CONTROL = 0x11
 VK_ALT = 0x12
-EXTENDED_KEYS = {0x2E, 0x25}  # Delete and the arrows live on the extended keypad
-COMMAND_CHORDS = {"[": (VK_ALT, VK["left"])}
+EXTENDED_KEYS = {0x2E, 0x25, 0x26, 0x27, 0x28, 0x24, 0x23}  # Delete, the arrows, Home and End live on the extended keypad
+COMMAND_CHORDS = {
+    "[": (VK_ALT, VK["left"]),
+    "]": (VK_ALT, VK["right"]),
+    "up": (VK_CONTROL, VK["home"]),
+    "down": (VK_CONTROL, VK["end"]),
+}
 
 INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
@@ -87,7 +100,10 @@ KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_WHEEL = 0x0800
+MONITORINFOF_PRIMARY = 0x1
 
 
 # ------------------------------------------------------------------ pure rules
@@ -125,9 +141,11 @@ def display_name(process_name: str) -> str:
     return next((name for name, exe in BROWSER_EXES.items() if exe == stem), process_name)
 
 
-def key_events(key: str, command: bool = False) -> list[tuple[int, int]]:
+def key_events(key: str, command: bool = False, shift: bool = False) -> list[tuple[int, int]]:
     """(virtual key, flags) for pressing a key, with its modifiers held around it."""
     keys = COMMAND_CHORDS.get(key, (VK_CONTROL, VK[key])) if command else (VK[key],)
+    if shift:
+        keys = (VK_SHIFT, *keys)
     down = [(vk, KEYEVENTF_EXTENDEDKEY if vk in EXTENDED_KEYS else 0) for vk in keys]
     up = [(vk, flags | KEYEVENTF_KEYUP) for vk, flags in reversed(down)]
     return down + up
@@ -144,6 +162,13 @@ def unicode_events(text: str) -> list[tuple[int, int]]:
 def wheel_delta(lines: int) -> int:
     """The wheel delta that scrolls `lines` lines; positive scrolls up, as on macOS."""
     return round(lines * WHEEL_DELTA / LINES_PER_NOTCH)
+
+
+def button_events(clicks: int = 1, right: bool = False) -> list[int]:
+    """The mouse flags for a click: down then up, once per click. Windows reads two quick clicks
+    as a double click by itself, so a double click needs no count of its own."""
+    down, up = (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP) if right else (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
+    return [down, up] * clicks
 
 
 def landed(target: tuple[int, int], actual: tuple[float, float]) -> bool:
@@ -258,8 +283,8 @@ def _move(point: tuple[int, int]) -> None:
     time.sleep(EVENT_GAP)
 
 
-def click_at(point: tuple[float, float]) -> None:
-    """Move, read back where the cursor landed, then press and release there.
+def click_at(point: tuple[float, float], clicks: int = 1, right: bool = False) -> None:
+    """Move, read back where the cursor landed, then press and release there, once or twice.
 
     A cursor that did not reach the target (another desktop has the input, or the point is off
     every monitor) means the click would land somewhere unknown, so nothing is pressed.
@@ -269,12 +294,12 @@ def click_at(point: tuple[float, float]) -> None:
     actual = mouse_location()
     if not landed(target, actual):
         raise Missed(f"the cursor went to {actual}, not {target}")
-    _send(_mouse(MOUSEEVENTF_LEFTDOWN))
-    _send(_mouse(MOUSEEVENTF_LEFTUP))
+    for flags in button_events(clicks, right):
+        _send(_mouse(flags))
 
 
-def press(key: str, command: bool = False) -> None:
-    for vk, flags in key_events(key, command):
+def press(key: str, command: bool = False, shift: bool = False) -> None:
+    for vk, flags in key_events(key, command, shift):
         _send(_key(vk=vk, flags=flags))
 
 
@@ -355,6 +380,76 @@ def activate(app: str, timeout: float = 3.0) -> bool:
     return win32gui.GetForegroundWindow() == hwnd
 
 
+def _titled_windows(pid: int | None = None) -> list[int]:
+    """Visible, titled top-level windows, top of the z-order first; one process's when `pid` is given."""
+    found: list[int] = []
+
+    def visit(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd) and (pid is None or _window_pid(hwnd) == pid):
+            found.append(hwnd)
+
+    win32gui.EnumWindows(visit, None)
+    return found
+
+
+def installed_apps() -> list[str]:
+    """The apps that have a window open, by the name `activate` finds them by.
+
+    `activate` brings an app forward through a window it already has; nothing here launches one by
+    name, so an app with no window is not one open_app could reach, and it is not offered. A Start
+    menu scan would list apps the loop cannot open.
+    """
+    return sorted({display_name(_process_name(_window_pid(hwnd))) for hwnd in _titled_windows()} - {""}, key=str.casefold)
+
+
+def running_apps() -> set[str]:
+    """The same apps: on Windows only an app with a window can be switched to."""
+    return set(installed_apps())
+
+
+def app_windows(pid: int, limit: int = 12) -> list[WindowRef]:
+    """One process's titled windows, front first. The foreground one is the main window."""
+    front = win32gui.GetForegroundWindow()
+    return [
+        WindowRef(title=win32gui.GetWindowText(hwnd).strip(), main=hwnd == front, ref=hwnd)
+        for hwnd in _titled_windows(pid)[:limit]
+    ]
+
+
+def raise_window(ref) -> bool:
+    """Bring one window to the front. Windows may refuse to hand the focus over; that reads as False."""
+    check_abort()
+    try:
+        win32gui.ShowWindow(ref, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(ref)
+    except Exception:
+        return False
+    return win32gui.GetForegroundWindow() == ref
+
+
+def menu_items(pid: int, limit: int) -> list[MenuItem]:
+    """None, on Windows. UI Automation lists a menu's items only once the menu is expanded, which
+    opens it on screen and takes the focus; reading the menu bar here would mean driving it. So
+    press_menu is never offered on Windows, which is what an empty list means to the classifier."""
+    return []
+
+
+def clipboard_text() -> str:
+    """The clipboard's text now; empty when it holds something else, or another app has it open."""
+    try:
+        win32clipboard.OpenClipboard()
+    except Exception:
+        return ""
+    try:
+        if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+            return ""
+        return str(win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT) or "")
+    except Exception:
+        return ""
+    finally:
+        win32clipboard.CloseClipboard()
+
+
 def open_url(browser: str, url: str) -> bool:
     exe = next((exe for name, exe in BROWSER_EXES.items() if name.lower() == browser.strip().lower()), None)
     if exe and shutil.which(exe):
@@ -414,12 +509,32 @@ def frontmost_window_center(pid: int | None = None) -> tuple[float, float] | Non
 # ------------------------------------------------------------------ capture, OCR, and accessibility
 
 
-def screenshot() -> Image.Image:
-    """The primary monitor, the one macOS calls the main display."""
-    return ImageGrab.grab().convert("RGB")
+def active_displays() -> list[tuple[float, float, float, float]]:
+    """Every monitor as x, y, w, h in virtual-screen pixels, the primary one first."""
+    monitors = []
+    for handle, _, rect in win32api.EnumDisplayMonitors(None, None):
+        info = win32api.GetMonitorInfo(handle)
+        left, top, right, bottom = info.get("Monitor", rect)
+        monitors.append(
+            (
+                bool(info.get("Flags", 0) & MONITORINFOF_PRIMARY),
+                (float(left), float(top), float(right - left), float(bottom - top)),
+            )
+        )
+    monitors.sort(key=lambda monitor: not monitor[0])
+    return [frame for _, frame in monitors] or [
+        (0.0, 0.0, float(win32api.GetSystemMetrics(0)), float(win32api.GetSystemMetrics(1)))
+    ]
 
 
-def display_scale(image: Image.Image) -> float:
+def screenshot(display: int = 1) -> Image.Image:
+    """One monitor, counted from 1 in the order `active_displays` lists them, primary first."""
+    frames = active_displays()
+    x, y, w, h = frames[display - 1] if 0 < display <= len(frames) else frames[0]
+    return ImageGrab.grab(bbox=(int(x), int(y), int(x + w), int(y + h)), all_screens=True).convert("RGB")
+
+
+def display_scale(image: Image.Image, bounds: tuple[float, float, float, float] | None = None) -> float:
     """Per-monitor DPI awareness keeps every coordinate in physical pixels, so a screen point
     already is a capture pixel; unlike macOS, there is no separate points-vs-pixels scale."""
     return 1.0
@@ -481,7 +596,15 @@ def focused_field() -> Field | None:
         w=w,
         h=h,
         ref=element,
+        secure=_ui_is_password(element),
     )
+
+
+def _ui_is_password(element) -> bool:
+    try:
+        return bool(getattr(element, "IsPassword", False))
+    except Exception:
+        return False
 
 
 # ------------------------------------------------------------------ acting on an element
@@ -570,3 +693,18 @@ def actionable_elements(pid: int, display_w_pt: float, display_h_pt: float) -> t
     except Exception:
         return [], [], False
     return walk_actionable(root, _ui_children, _ui_attrs, _ui_actions, display_w_pt, display_h_pt)
+
+
+def nameless_elements(pid: int, display_w_pt: float, display_h_pt: float) -> list[AxNode]:
+    """The foreground window's visible pressable controls with no name at all, in screen pixels:
+    the same walk as `actionable_elements`, keeping only what it would otherwise drop unnamed."""
+    hwnd = win32gui.GetForegroundWindow()
+    if _window_pid(hwnd) != pid:
+        return []
+    try:
+        root = auto.ControlFromHandle(hwnd)
+    except Exception:
+        return []
+    out: list[AxNode] = []
+    walk_actionable(root, _ui_children, _ui_attrs, _ui_actions, display_w_pt, display_h_pt, nameless=out)
+    return out

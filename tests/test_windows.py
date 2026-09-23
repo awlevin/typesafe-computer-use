@@ -189,3 +189,41 @@ def test_ocr_lines_box_the_words_and_report_full_confidence():
     }
     assert ocr_lines(result) == [("Sign in", windows.OCR_CONFIDENCE, (10.0, 18.0, 57.0, 34.0))]
     assert windows.OCR_CONFIDENCE == 1.0  # Windows.Media.Ocr reports none
+
+
+def test_shift_is_held_outside_the_other_modifiers():
+    assert key_events("z", command=True, shift=True) == [
+        (0x10, 0),
+        (0x11, 0),
+        (ord("Z"), 0),
+        (ord("Z"), 2),
+        (0x11, 2),
+        (0x10, 2),
+    ]
+
+
+@pytest.mark.parametrize(("key", "chord"), [("]", (0x12, 0x27)), ("up", (0x11, 0x24)), ("down", (0x11, 0x23))])
+def test_the_macos_chords_with_a_windows_spelling_of_their_own(key, chord):
+    down = [vk for vk, flags in key_events(key, command=True) if not flags & 2]
+    assert tuple(down) == chord
+
+
+def test_a_double_click_is_two_clicks_and_a_right_click_uses_the_other_button():
+    assert windows.button_events() == [windows.MOUSEEVENTF_LEFTDOWN, windows.MOUSEEVENTF_LEFTUP]
+    assert windows.button_events(clicks=2) == [windows.MOUSEEVENTF_LEFTDOWN, windows.MOUSEEVENTF_LEFTUP] * 2
+    assert windows.button_events(right=True) == [windows.MOUSEEVENTF_RIGHTDOWN, windows.MOUSEEVENTF_RIGHTUP]
+
+
+def test_a_right_double_click_that_landed_sends_the_right_button_twice(monkeypatch):
+    sent = []
+    monkeypatch.setattr(windows, "_move", lambda point: None)
+    monkeypatch.setattr(windows, "mouse_location", lambda: (200.0, 300.0))
+    monkeypatch.setattr(windows, "_send", lambda event: sent.append(event.u.mi.dwFlags))
+
+    windows.click_at((200.0, 300.0), clicks=2, right=True)
+
+    assert sent == [windows.MOUSEEVENTF_RIGHTDOWN, windows.MOUSEEVENTF_RIGHTUP] * 2
+
+
+def test_the_menu_bar_is_not_read_on_windows_so_press_menu_is_never_offered():
+    assert windows.menu_items(1234, 50) == []

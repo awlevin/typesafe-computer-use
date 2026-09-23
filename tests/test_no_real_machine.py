@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from conftest import REAL_ACCESSIBILITY
 
 from typesafe_computer_use import macos, windows
 from typesafe_computer_use.browser import cdp
@@ -23,12 +24,29 @@ from typesafe_computer_use.browser.cdp import Chrome, Session
         lambda: macos.open_url("Google Chrome", "https://example.com"),
         lambda: macos.activate("Finder"),
         lambda: macos.screenshot(),
+        lambda: macos.screenshot(2),
+        lambda: macos.click_at((200.0, 200.0), clicks=2),
+        lambda: macos.click_at((200.0, 200.0), right=True),
+        lambda: macos.press("z", command=True, shift=True),
+        lambda: macos._launch("Notes"),
+        lambda: macos.clipboard_text(),
     ],
 )
 def test_an_unpatched_call_refuses_instead_of_reaching_the_machine(touch):
     # Off macOS the stand-in Quartz refuses first, before the guard is reached.
     with pytest.raises(RuntimeError, match=r"real machine|unavailable on this OS"):
         touch()
+
+
+@pytest.mark.skipif(not REAL_ACCESSIBILITY, reason="the stand-in ApplicationServices refuses everything off macOS")
+@pytest.mark.parametrize(
+    "touch",
+    [lambda: macos.raise_window(object()), lambda: macos.ax_press(object()), lambda: macos.ax_set_value(object(), "hi")],
+)
+def test_an_unpatched_accessibility_action_refuses_or_misses(touch):
+    """AXRaise and AXPress reach another app through the same bridge; the guard refuses both, and the
+    adapter reads a refusal as the action not taking, never as the machine being driven."""
+    assert touch() is False
 
 
 def test_the_pointer_reads_as_mid_screen_so_no_test_aborts_by_chance():
@@ -51,6 +69,12 @@ def test_the_pointer_reads_as_mid_screen_so_no_test_aborts_by_chance():
         lambda: windows.ax_press(object()),
         lambda: windows.ax_focus(object()),
         lambda: windows.ax_set_value(object(), "hi"),
+        lambda: windows.click_at((200.0, 200.0), clicks=2),
+        lambda: windows.click_at((200.0, 200.0), right=True),
+        lambda: windows.press("z", command=True, shift=True),
+        lambda: windows.raise_window(1),
+        lambda: windows.clipboard_text(),
+        lambda: windows.screenshot(2),
     ],
 )
 def test_an_unpatched_windows_call_refuses_instead_of_reaching_the_machine(touch):

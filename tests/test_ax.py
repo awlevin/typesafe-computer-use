@@ -322,3 +322,32 @@ def test_an_app_that_lists_itself_as_a_child_terminates():
     found, _, cap_hit = walk_actionable("app", lambda n: tree[n], attrs, lambda n: ["AXPress"], 1000, 800)
     assert [n.label for n in found] == ["File"]
     assert not cap_hit
+
+
+# ------------------------------------------------------------------ unlabelled icons
+
+
+def nameless(root, **kwargs):
+    out: list[AxNode] = []
+    walk(root, nameless=out, **kwargs)
+    return out
+
+
+def test_an_unlabelled_pressable_icon_is_collected_only_when_asked_for():
+    tree = app(node("AXButton", "", press=True), node("AXButton", "Share", press=True))
+    assert labels(tree)[0] == ["Share"]  # the walk itself is unchanged
+    assert [(n.role, n.label) for n in nameless(tree)] == [("AXButton", "")]
+
+
+def test_an_icon_that_borrows_a_label_or_cannot_be_pressed_is_not_nameless():
+    tree = app(
+        node("AXButton", "Play", press=True, children=[node("AXImage", "", press=True)]),  # the image borrows "Play"
+        node("AXImage", "", press=False),  # decorative: nothing to press
+        node("AXButton", "", press=True, frame=(10.0, -500.0, 20.0, 20.0)),  # off the display
+    )
+    assert nameless(tree) == []
+
+
+def test_the_nameless_cap_bounds_what_is_collected():
+    tree = app(*[node("AXButton", "", press=True, frame=(10.0 + 30 * i, 10.0, 20.0, 20.0)) for i in range(10)])
+    assert len(nameless(tree, nameless_cap=3)) == 3
