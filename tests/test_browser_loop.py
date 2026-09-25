@@ -69,6 +69,45 @@ def login_page(**extra):
     }
 
 
+def text_block(eid, text, **kwargs):
+    base = {"e": eid, "text": text, "x": 10, "y": 300, "w": 420, "h": 20}
+    base.update(kwargs)
+    return base
+
+
+ANSWER = "SEP 19"
+
+
+def listing_page(**extra):
+    """A concert page whose answer lives in plain text: no control on the page names it,
+    so a state built from interactive elements alone has nothing to check."""
+    page = {
+        "url": "https://example.test/concerts",
+        "title": "Concerts",
+        "vw": 1200,
+        "vh": 800,
+        "count": 2,
+        "items": [
+            item(0, "Home", tag="a", role="link"),
+            item(1, "Buy tickets", tag="button", role="button"),
+        ],
+        "text": [
+            text_block("t0", "Upcoming shows"),
+            text_block("t1", "The Echo Parade - SEP 19 at the Fillmore, doors 8 PM"),
+            text_block("t2", "Sold out: JUN 4 at the Fox"),
+        ],
+        "scroll_y": 0,
+        "scroll_max": 0,
+        "candidates": 5,
+        "below_fold": 0,
+        "can_scroll": False,
+        "history_len": 1,
+        "fields": 0,
+    }
+    page.update(extra)
+    return page
+
+
 class FakeBrowser:
     """A page behind a CDP session: answers the page script, focus and field reads, and
     records every Input event the loop sends."""
@@ -280,3 +319,72 @@ def test_decide_survives_an_answer_without_a_satisfied_noul():
 
     decision = decide(Partial(), "g", perceive(FakeBrowser(login_page())), [])
     assert decision.satisfied.noul == 0.0 and decision.kind.choice == "wait"
+
+
+# ------------------------------------------------------------- page text
+def test_an_answer_that_lives_only_in_plain_text_reaches_done(tmp_path):
+    """The issue's done-when: the answer is in no control's label, only in the page's
+    visible text, and the run still finishes - because the text reached the classifier."""
+    browser = FakeBrowser(listing_page())
+    client = FakeTypeSafe(("done", None))
+    result, folder = run(browser, client, tmp_path, steps=1)
+
+    state = client.requests[0]["state"]
+    assert any(ANSWER in block["text"] for block in state["page_text"])
+    assert ANSWER not in json.dumps(state["elements"])
+    assert result.outcome == "done"
+    # The step payload and the saved state in the run folder show the new text.
+    assert ANSWER in load_step(folder.root, 1)["payload"]
+    saved = json.loads((folder.root / "step-01-state.json").read_text())
+    assert any(ANSWER in block["text"] for block in saved["page_text"])
+
+
+def test_page_text_is_evidence_separate_from_click_targets():
+    """Text blocks get evidence ids, not element indexes: nothing in the element question
+    or the elements list can point the loop at one."""
+    page = perceive(FakeBrowser(listing_page()))
+    assert [tb.evidence_id for tb in page.text] == ["t0", "t1", "t2"]
+
+    criteria = element_criteria(page)
+    assert set(criteria) == {"0", "1"}
+    assert ANSWER not in json.dumps(criteria)
+
+    state = base_state("g", page, [], url_catalog=None)
+    assert [el["i"] for el in state["elements"]] == [0, 1]
+    assert ANSWER not in json.dumps(state["elements"])
+    assert {block["e"] for block in state["page_text"]} == {"t0", "t1", "t2"}
+
+
+def test_a_page_with_no_text_sends_no_page_text():
+    """Pages without readable text keep the lean payload: no empty list in the state."""
+    page = login_page()
+    del page["items"][1]  # drop the password field, keep username + button
+    state = base_state("g", perceive(FakeBrowser(page)), [], url_catalog=None)
+    assert state["page_text"] is None
+
+
+def test_page_text_is_capped():
+    page = listing_page(text=[text_block(f"t{i}", f"block number {i} of the page") for i in range(300)])
+    assert len(perceive(FakeBrowser(page)).text) == 120
+
+
+def test_a_password_value_stays_out_of_the_state_when_text_is_collected():
+    """Done-when two, with text collection on: the field's value reaches nothing, while
+    ordinary page text around the form does."""
+    page = perceive(FakeBrowser(login_page(text=[text_block("t0", "Sign in to continue"), text_block("t1", "Welcome back")])))
+    blob = json.dumps(base_state("g", page, [], url_catalog=None))
+    assert SECRET not in blob
+    assert "Welcome back" in blob
+    assert SECRET not in json.dumps([tb.__dict__ for tb in page.text]) and SECRET not in to_json(page)
+
+
+def test_the_page_script_never_collects_what_was_typed_or_drafted():
+    """The text pass excludes text controls and editable regions, so a field's contents or
+    an unsent contenteditable draft cannot leave the page as 'evidence'."""
+    js = INTERACTIVE_JS
+    assert "createTreeWalker" in js
+    assert "isContentEditable" in js
+    assert "TEXTAREA" in js and "SELECT" in js
+    assert "textbox" in js and "searchbox" in js
+    # Still exactly one read of el.value in the whole script: the button's own label.
+    assert js.count("el.value") == 1

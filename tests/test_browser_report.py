@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from typesafe_computer_use.browser.decide import serialize_answers
-from typesafe_computer_use.browser.perceive import Element, Page
+from typesafe_computer_use.browser.perceive import Element, Page, TextBlock
 from typesafe_computer_use.browser.report import RunFolder, load_step, render_answers, render_payload
 from typesafe_computer_use.browser.runner import resolve_text
 from typesafe_computer_use.writer import CREDENTIAL_HINTS, compose_browser_text, looks_credential
@@ -143,6 +143,33 @@ def test_load_step_round_trips_a_step(tmp_path: Path):
     assert rebuilt.field_count == 1  # derived from the items, not stored
     assert rebuilt.items == page.items
     assert rebuilt.can_scroll and rebuilt.scroll_y == 0
+    assert rebuilt.text == []  # an old run folder, written before page text, still loads
+
+
+def test_load_step_round_trips_page_text(tmp_path: Path):
+    """The evidence blocks come back with the elements, so a replayed step rebuilds the
+    exact state the classifier saw, page_text included."""
+    folder = RunFolder.create(tmp_path)
+    page = make_page(
+        text=[
+            TextBlock("t0", "Invoice #1042 total $42.10", 10, 300, 300, 20),
+            TextBlock("t1", "Payment failed: card declined", 10, 330, 300, 20),
+        ]
+    )
+    folder.step_elements(1, page, can_write=False)
+    folder.finish({"goal": "g", "outcome": "done"})
+
+    rebuilt = load_step(folder.root, 1)["page"]
+    assert rebuilt.text == page.text
+    assert [tb.evidence_id for tb in rebuilt.text] == ["t0", "t1"]
+
+
+def test_render_payload_shows_page_text_as_evidence():
+    page = make_page(text=[TextBlock("t0", "Next concert SEP 19", 10, 300, 300, 20)])
+    text = render_payload(goal="g", page=page, history=[], state={"goal": "g"}, actions={}, elements={})
+    assert "PAGE TEXT" in text
+    assert "never click targets" in text
+    assert "Next concert SEP 19" in text
 
 
 def test_missing_step_raises(tmp_path: Path):

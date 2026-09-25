@@ -238,6 +238,7 @@ the TypeSafe decision. Perception is now ~0% of a step.
 
 ```
 Runtime.evaluate ─► ordered element list (text, role, click point, on-screen, covered)
+                   + the page's visible text (prices, dates, errors; evidence only)
                      │
         ONE TypeSafe request, two Choices
         kind    : click | type_text | navigate | press_enter | scroll_down | ... | done
@@ -253,6 +254,17 @@ model doubt when the model was never at fault.
 
 The post-action observation and the next step's perception are the same call, so waiting
 costs no extra round trip.
+
+Perception also returns the page's visible text - the price in a `<p>`, the date in a
+table, the error under a form - as bounded `page_text` blocks in reading order, collected
+in the same `Runtime.evaluate`. They go into the state as their own list with evidence
+ids, separate from `elements`, so they can inform `done` and `satisfied` but can never be
+chosen as click targets. Blocks are capped (120 blocks of 240 characters), duplicates of
+each other and of control labels are dropped, and the typing rule still holds: text inside
+an input, a textarea, a select or an editable region is not collected, so what the user
+typed - including an unsent `contenteditable` draft - still never leaves the page. A
+text-only change (an error appearing, a price loading) counts as a page change, so the
+next decision is never made against the stale page.
 
 ### Where browser free text comes from
 
@@ -287,7 +299,8 @@ reconstructed state matches the saved one, so a stall can be re-decided without 
 ### Browser limits
 
 Viewport only, the same as OCR only saw the visible screen; elements below the fold need
-`scroll_down` first. The DOM sees elements rather than paint, so canvas-drawn UI and text
+`scroll_down` first, for text as for elements. The DOM sees elements and their text
+rather than paint, so canvas-drawn UI and text
 baked into images are invisible here and **are** visible to OCR — use `macos.py` for those.
 One tab, one page target, no iframes or shadow-DOM piercing.
 

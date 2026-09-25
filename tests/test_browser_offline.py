@@ -191,3 +191,14 @@ def test_the_session_only_connects_to_this_chromes_loopback_port():
     ):
         with pytest.raises(CDPError):
             local_debugger_url(other, 9222)
+
+
+def test_fingerprint_catches_a_text_only_change():
+    """A form error or a freshly loaded price can leave every element untouched; the
+    change must still register, or the loop would decide against the stale page."""
+    base = page_dict(items=[element_dict(0, "Buy")])
+    before = perceive(StubSession([base]))
+    errored = page_dict(items=[element_dict(0, "Buy")])
+    errored["text"] = [{"e": "t0", "text": "Payment failed: card declined", "x": 10, "y": 300, "w": 300, "h": 20}]
+    after = perceive(StubSession([errored]))
+    assert act.fingerprint(before) != act.fingerprint(after)

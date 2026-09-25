@@ -138,6 +138,9 @@ def base_state(
             }
             for it in page.items
         ],
+        # The page's visible text (prices, dates, error messages), keyed by evidence id.
+        # Kept apart from `elements` so a text block is never mistaken for a click target.
+        "page_text": [{"e": tb.evidence_id, "text": tb.text} for tb in page.text] or None,
         "known_sites": url_catalog or None,
     }
 
