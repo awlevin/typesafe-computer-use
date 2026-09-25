@@ -22,8 +22,10 @@ def calls(monkeypatch):
     return log
 
 
-def field(ref=None, value="") -> Field:
-    return Field(role="AXTextField", label="Email", placeholder="", value=value, x=10, y=20, w=200, h=30, ref=ref)
+def field(ref=None, value="", subrole="") -> Field:
+    return Field(
+        role="AXTextField", label="Email", placeholder="", value=value, x=10, y=20, w=200, h=30, subrole=subrole, ref=ref
+    )
 
 
 def test_an_item_from_the_accessibility_tree_is_pressed(screen, calls, monkeypatch):
@@ -182,6 +184,31 @@ def test_a_browser_that_does_not_come_to_the_front_is_a_no_op(screen, monkeypatc
     monkeypatch.setattr(desktop, "activate", lambda app: False)
     failure = actions.perform(browsing("none"), screen, [], context())
     assert failure == "use_browser failed: Google Chrome did not come to the front"
+
+
+# ------------------------------------------------------------ password fields are never typed into
+
+
+def test_a_macos_password_field_is_not_treated_as_a_text_field():
+    """`role` alone is `AXTextField` for a password box too; only `subrole` says it is secure."""
+    normal = field()
+    secure = field(subrole="AXSecureTextField")
+    assert normal.is_text is True and normal.is_secret is False
+    assert secure.is_text is False and secure.is_secret is True
+
+
+def test_type_text_refuses_a_focused_password_field(screen, calls):
+    focused = replace(screen, field=field(subrole="AXSecureTextField"))
+    refusal = actions.perform(SimpleNamespace(chosen="type_text"), focused, [], context(object()))
+    assert refusal == "type_text refused: no text field is focused"
+    assert calls == []
+
+
+def test_type_email_refuses_a_focused_password_field(screen, calls):
+    focused = replace(screen, field=field(subrole="AXSecureTextField"))
+    refusal = actions.perform(SimpleNamespace(chosen="type_email"), focused, [], context())
+    assert refusal == "type_email refused: no text field is focused"
+    assert calls == []
 
 
 def test_typing_sets_the_value_when_the_field_reads_it_back(calls, monkeypatch):

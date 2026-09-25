@@ -248,6 +248,7 @@ def focused_field() -> Field | None:
         y=y,
         w=w,
         h=h,
+        subrole=str(_ax_attr(element, AS.kAXSubroleAttribute) or ""),
         ref=element,
     )
 
