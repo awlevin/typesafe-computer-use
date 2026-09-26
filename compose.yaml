@@ -1,4 +1,4 @@
-# The sandbox computer. Drive it with scripts/sandbox; see "Sandbox" in the README.
+# The sandbox computer. Drive it with scripts/sandbox; see docs/sandbox.md.
 # One name for every checkout and worktree, so there is only ever one sandbox on port 6080.
 name: typesafe-computer-use-sandbox
 services:

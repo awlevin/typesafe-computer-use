@@ -29,7 +29,7 @@ computer in `tests/world.py`, a policy standing in for the classifier, and asser
 the outcome, the final page, and the actions the world received. Leave it failing under
 `xfail` until the loop can do it, then fix the loop rather than the scenario. The
 scenarios run the real `runner.run`, so a failure there is an architecture finding, not
-a harness one.
+a harness one. Every stop rule in the loop was found or fixed that way.
 
 ## Before a pull request
 
@@ -37,6 +37,11 @@ a harness one.
 uv run ruff check . && uv run ruff format .
 uv run pytest -q
 ```
+
+CI runs the same on macOS, and the tests again on Linux: they are pure logic, and
+`tests/conftest.py` stands in for the platform modules where they cannot be installed. A third job
+checks `infra/gcp` (format, validation, and `terraform test` against mock providers) and
+`scripts/osworld-gcp`, with no cloud credentials.
 
 Add a replay-based note to the PR when a change alters what the model sees:
 which run folder, which step, what the decision was before and after.

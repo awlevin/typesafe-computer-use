@@ -1,0 +1,37 @@
+<desktop-frame xmlns:st="https://accessibility.ubuntu.example.org/ns/state" xmlns:attr="https://accessibility.ubuntu.example.org/ns/attributes" xmlns:cp="https://accessibility.ubuntu.example.org/ns/component" xmlns:doc="https://accessibility.ubuntu.example.org/ns/document" xmlns:docattr="https://accessibility.ubuntu.example.org/ns/document/attributes" xmlns:txt="https://accessibility.ubuntu.example.org/ns/text" xmlns:val="https://accessibility.ubuntu.example.org/ns/value" xmlns:act="https://accessibility.ubuntu.example.org/ns/action">
+  <!-- Hand-written in the format of osworld-server src/accessibility.py at a3cc3f0c, the server of OSWorld-V2 at 3d778a3c. -->
+  <application name="gnome-shell">
+    <window name="" st:enabled="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(0, 0)" cp:size="(1920, 1080)">
+      <push-button name="Google Chrome" st:enabled="true" st:focusable="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(0, 33)" cp:size="(70, 64)" act:click_desc="" act:click_kb="" />
+    </window>
+  </application>
+  <application name="Google Chrome">
+    <frame name="Google - Google Chrome" st:active="true" st:enabled="true" st:resizable="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(70, 27)" cp:size="(1850, 1053)">
+      <panel name="" st:enabled="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(70, 27)" cp:size="(1850, 1053)">
+        <page-tab-list name="" st:enabled="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(70, 27)" cp:size="(1850, 41)">
+          <page-tab name="Google" st:enabled="true" st:focusable="true" st:selectable="true" st:selected="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(78, 32)" cp:size="(240, 36)" act:click_desc="" act:click_kb="" />
+        </page-tab-list>
+        <push-button name="Back" st:enabled="true" st:focusable="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(78, 76)" cp:size="(34, 34)" act:press_desc="" act:press_kb="" />
+        <push-button name="Reload" st:enabled="true" st:focusable="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(150, 76)" cp:size="(34, 34)" act:press_desc="" act:press_kb="" />
+        <entry name="Address and search bar" attr:placeholder-text="Search Google or type a URL" st:editable="true" st:enabled="true" st:focusable="true" st:focused="true" st:selectable-text="true" st:sensitive="true" st:showing="true" st:single-line="true" st:visible="true" cp:screencoord="(230, 78)" cp:size="(1560, 30)" act:activate_desc="" act:activate_kb="">https://www.google.com/</entry>
+        <document-web name="Google" st:enabled="true" st:focusable="true" st:readonly="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(70, 118)" cp:size="(1850, 962)">
+          <section name="" st:enabled="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(70, 118)" cp:size="(1850, 60)">
+            <link name="Gmail" st:enabled="true" st:focusable="true" st:linked="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(1640, 134)" cp:size="(40, 24)" act:jump_desc="" act:jump_kb="">Gmail</link>
+            <link name="Images" st:enabled="true" st:focusable="true" st:linked="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(1696, 134)" cp:size="(50, 24)" act:jump_desc="" act:jump_kb="">Images</link>
+          </section>
+          <entry name="Search" st:editable="true" st:enabled="true" st:focusable="true" st:multi-line="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(700, 460)" cp:size="(520, 44)" act:activate_desc="" act:activate_kb="" />
+          <password-text name="Password" st:editable="true" st:enabled="true" st:focusable="true" st:sensitive="true" st:showing="true" st:single-line="true" st:visible="true" cp:screencoord="(700, 520)" cp:size="(520, 44)" act:activate_desc="" act:activate_kb="">••••••</password-text>
+          <list name="" st:enabled="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(700, 580)" cp:size="(520, 30)">
+            <list-item name="" st:enabled="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(700, 580)" cp:size="(520, 30)">
+              <static name="" st:enabled="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(708, 586)" cp:size="(160, 18)">Recent searches</static>
+            </list-item>
+          </list>
+          <!-- Scrolled below the display: showing, with coordinates past its bottom edge. -->
+          <link name="Privacy" st:enabled="true" st:focusable="true" st:linked="true" st:sensitive="true" st:showing="true" st:visible="true" cp:screencoord="(90, 2400)" cp:size="(52, 24)" act:jump_desc="" act:jump_kb="">Privacy</link>
+          <!-- Not showing, so OSWorld writes no coordinates. -->
+          <link name="Terms" st:enabled="true" st:focusable="true" st:linked="true" st:sensitive="true" act:jump_desc="" act:jump_kb="">Terms</link>
+        </document-web>
+      </panel>
+    </frame>
+  </application>
+</desktop-frame>

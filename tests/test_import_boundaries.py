@@ -1,11 +1,15 @@
-"""The browser backend runs where no desktop adapter can load (the Linux sandbox, a server).
+"""Code that runs where no desktop adapter can load (the Linux sandbox, a server, OSWorld's VM host).
 
 Read from the source rather than by importing: every module the browser package reaches must
-stay clear of the platform adapter, or `clicker-bench` needs macOS-only packages to start.
+stay clear of the platform adapter, or `clicker-bench` needs macOS-only packages to start. The
+same holds for the readers of OSWorld's accessibility tree and of its results, which run beside
+OSWorld on Linux.
 """
 
 import ast
 from pathlib import Path
+
+import pytest
 
 PACKAGE = Path(__file__).resolve().parent.parent / "typesafe_computer_use"
 PLATFORM = {"platform_adapter", "macos", "windows", "perception"}
@@ -43,8 +47,9 @@ def module_file(name: str) -> Path | None:
     return None
 
 
-def test_the_browser_backend_never_reaches_the_desktop_adapter():
-    seen, todo = set(), ["browser"]
+@pytest.mark.parametrize("start", ["browser", "osworld.a11y", "osworld.results"])
+def test_never_reaches_the_desktop_adapter(start):
+    seen, todo = set(), [start]
     while todo:
         name = todo.pop()
         if name in seen:
