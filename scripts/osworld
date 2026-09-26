@@ -204,7 +204,7 @@ archive_earlier() {
 check_provider() {
   if [[ "$PROVIDER" == docker && ! -e /dev/kvm ]]; then
     die "OSWorld's docker provider needs KVM, and this machine has no /dev/kvm. Run it on a Linux" \
-      "host with KVM (see the README), or set OSWORLD_PROVIDER to another provider."
+      "host with KVM (see docs/osworld.md), or set OSWORLD_PROVIDER to another provider."
   fi
 }
 
