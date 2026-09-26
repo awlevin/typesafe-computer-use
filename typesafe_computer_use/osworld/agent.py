@@ -17,6 +17,7 @@ that the task is infeasible.
 from __future__ import annotations
 
 import json
+import os
 import platform
 import queue
 import threading
@@ -40,6 +41,7 @@ STEP_SECONDS = 600.0  # how long `predict` waits for one step before it gives up
 RESET_JOIN_SECONDS = 5.0  # how long `reset` waits for a stopped worker to write its run folder
 DONE = "DONE"
 WAIT = "WAIT"
+SAVE_A11Y = "JEV_OSWORLD_SAVE_A11Y"  # "1" saves each observation's raw tree into the run folder
 
 
 class _FromEnv:
@@ -180,7 +182,8 @@ class _Run:
         try:
             if self.after is not None:
                 self.after.join()
-            adapter = OSWorldDesktop(obs, self.agent.recognize_text, self._next_obs)
+            save = self.cfg.out if os.environ.get(SAVE_A11Y) == "1" else None
+            adapter = OSWorldDesktop(obs, self.agent.recognize_text, self._next_obs, save_a11y=save)
             with using(adapter):
                 state = runner.run(self.cfg, self._context)
             answer = f"; answer: {state.answer.text}" if state.answer is not None else ""

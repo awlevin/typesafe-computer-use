@@ -22,7 +22,7 @@ from world import FakeTypeSafe, FakeWriter, scripted
 from typesafe_computer_use import runner
 from typesafe_computer_use.decide import Decision
 from typesafe_computer_use.osworld import ocr
-from typesafe_computer_use.osworld.agent import JevAgent, describe
+from typesafe_computer_use.osworld.agent import SAVE_A11Y, JevAgent, describe
 from typesafe_computer_use.osworld.desktop import APP_PID, OSWorldDesktop
 from typesafe_computer_use.platform_adapter import current, host
 
@@ -111,6 +111,41 @@ def test_a_click_decision_becomes_one_pyautogui_click(jev, tmp_path):
     assert summary["history"][0].startswith("clicked 'Gmail'")
     assert summary["osworld"] == {"ocr": "fake", "provider": "docker", "architecture": platform.machine()}
     assert (tmp_path / "jev" / "step-001-raw.png").exists(), "jev's usual run folder, so a step replays"
+
+
+def test_the_raw_trees_are_saved_only_when_asked(jev, tmp_path, monkeypatch):
+    monkeypatch.delenv(SAVE_A11Y, raising=False)
+    agent = jev(scripted(("click_item", "Gmail")))
+    agent.predict(GOAL, obs())
+    agent.predict(GOAL, obs())
+    finish(agent)
+    assert not list((tmp_path / "jev").glob("obs-*")), "nothing is saved by default"
+
+
+def test_the_raw_trees_go_into_the_run_folder_one_per_observation(jev, tmp_path, monkeypatch):
+    monkeypatch.setenv(SAVE_A11Y, "1")
+    after = with_address("https://mail.google.com/")
+    agent = jev(scripted(("click_item", "Gmail")))
+    agent.predict(GOAL, obs())
+    assert agent.predict(GOAL, obs(after))[1] == ["DONE"]
+    finish(agent)
+    saved = sorted(path.name for path in (tmp_path / "jev").glob("obs-*"))
+    assert saved == ["obs-000-a11y.xml", "obs-001-a11y.xml"]
+    assert (tmp_path / "jev" / "obs-000-a11y.xml").read_text(encoding="utf-8") == FIXTURE
+    assert (tmp_path / "jev" / "obs-001-a11y.xml").read_text(encoding="utf-8") == after
+
+
+def test_a_missing_tree_saves_nothing_but_still_counts(tmp_path):
+    handed: list = []
+
+    def next_obs(actions):
+        handed.append(actions)
+        return obs()
+
+    desktop = OSWorldDesktop(obs(None), lambda image: [], next_obs, save_a11y=tmp_path)
+    desktop.click_at((1.0, 2.0))
+    desktop.screenshot()
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["obs-001-a11y.xml"]
 
 
 def test_typing_and_its_check_split_into_two_steps_at_the_read(jev, tmp_path):
@@ -312,19 +347,75 @@ def test_keys_map_onto_pyautogui():
     ]
 
 
+PREFIX = "import pyautogui; import time; import platform; "  # how OSWorld's prefix starts every action
+
+
+def in_fake_vm(code: str, window: bool) -> list[tuple]:
+    """Run one action as the VM would, after OSWorld's prefix, against stand-ins that record calls:
+    wmctrl finds the browser's window when `window` is true."""
+    calls: list[tuple] = []
+    done = SimpleNamespace(returncode=0 if window else 1)
+    modules = {
+        "pyautogui": SimpleNamespace(
+            hotkey=lambda *keys: calls.append(("hotkey", *keys)),
+            write=lambda text, interval: calls.append(("write", text)),
+            press=lambda key: calls.append(("press", key)),
+        ),
+        "time": SimpleNamespace(sleep=lambda seconds: calls.append(("sleep", seconds))),
+        "platform": SimpleNamespace(),
+        "subprocess": SimpleNamespace(
+            DEVNULL=-3,
+            run=lambda args, **kwargs: calls.append(("run", args, kwargs)) or done,
+            Popen=lambda args, **kwargs: calls.append(("Popen", args, kwargs)),
+        ),
+    }
+    exec(PREFIX + code, {"__builtins__": {"__import__": lambda name, *rest: modules[name]}})
+    return calls
+
+
+DETACHED = {"stdin": -3, "stdout": -3, "stderr": -3, "start_new_session": True}
+
+
 def test_text_goes_in_only_as_a_string_literal():
     hostile = "it's \"quoted\"'); import os; os.system('true') #\nsecond line"
     desktop = over(obs())
     desktop.type_text(hostile)
     desktop.open_url("Google Chrome", hostile)
 
+    allowed = {"pyautogui.write", "pyautogui.press", "pyautogui.hotkey", "subprocess.run", "subprocess.Popen", "time.sleep"}
     for code in desktop.actions:
-        calls = [node for node in ast.walk(ast.parse(code)) if isinstance(node, ast.Call)]
-        assert {ast.unparse(call.func) for call in calls} <= {"pyautogui.write", "pyautogui.press", "pyautogui.hotkey"}
+        calls = [node for node in ast.walk(ast.parse(PREFIX + code)) if isinstance(node, ast.Call)]
+        assert {ast.unparse(call.func) for call in calls} <= allowed
         written = [call.args[0].value for call in calls if ast.unparse(call.func) == "pyautogui.write"]
         assert written == [hostile]
-    assert desktop.actions[1].startswith("pyautogui.hotkey('ctrl', 'l'); ")
-    assert desktop.actions[1].endswith("; pyautogui.press('enter')")
+    assert in_fake_vm(desktop.actions[0], window=True) == [("write", hostile)]
+    assert ("write", hostile) in in_fake_vm(desktop.actions[1], window=True)
+    assert in_fake_vm(desktop.actions[1], window=False)[-1] == ("Popen", ["google-chrome", hostile], DETACHED)
+
+
+def test_open_url_types_into_the_raised_browser_or_starts_it_on_the_url():
+    desktop = over(obs())
+    desktop.open_url("Google Chrome", "https://www.bing.com/")
+    (code,) = desktop.actions
+    raise_it = ("run", ["wmctrl", "-xa", "google-chrome"], {})
+    assert in_fake_vm(code, window=True) == [
+        raise_it,
+        ("sleep", 0.5),
+        ("hotkey", "ctrl", "l"),
+        ("write", "https://www.bing.com/"),
+        ("press", "enter"),
+    ]
+    assert in_fake_vm(code, window=False) == [raise_it, ("Popen", ["google-chrome", "https://www.bing.com/"], DETACHED)]
+
+
+def test_activate_raises_the_browser_or_starts_it_and_no_other_app():
+    desktop = over(obs())
+    assert desktop.activate("Google Chrome") is True
+    assert desktop.activate("Files") is False
+    (code,) = desktop.actions
+    raise_it = ("run", ["wmctrl", "-xa", "google-chrome"], {})
+    assert in_fake_vm(code, window=True) == [raise_it, ("sleep", 0.5)]
+    assert in_fake_vm(code, window=False) == [raise_it, ("Popen", ["google-chrome"], DETACHED)]
 
 
 def test_the_other_inputs_and_waits():
@@ -334,20 +425,15 @@ def test_the_other_inputs_and_waits():
     desktop.scroll(-10)
     desktop.sleep_watching(0)
     desktop.sleep_watching(3.0)
-    assert desktop.activate("Google Chrome") is True
-    assert desktop.activate("Files") is False
-    assert desktop.open_url("Google Chrome", "https://example.com") is True
 
-    assert desktop.actions[:5] == [
+    assert desktop.actions == [
         "pyautogui.click(12, 100)",
         CLEAR,
         "pyautogui.scroll(-10, x=995, y=554)",  # over the active window's center
         "WAIT",
-        "import shutil, subprocess; shutil.which('wmctrl') and subprocess.run(['wmctrl', '-xa', 'google-chrome'], check=False)",
     ]
-    assert len(desktop.actions) == 6
-    for code in desktop.actions[:3] + desktop.actions[4:]:
-        ast.parse(code)
+    for code in desktop.actions[:3]:
+        ast.parse(PREFIX + code)
 
 
 def test_with_no_tree_nothing_is_known_but_the_screenshot_and_ocr():

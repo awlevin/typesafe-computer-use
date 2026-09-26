@@ -1,8 +1,9 @@
 # OSWorld's generic runner with jev as the agent. A copy of OSWorld-V2's
 # scripts/python/run_multienv.py at commit 3d778a3c9a34a079316f70df023b166700445792 (tag
-# osworld-v2.1), changed only to build JevAgent (with the required --ocr) and to point it at each
-# task's result folder. To take an OSWorld update, re-copy that file at the new commit and make
-# the same changes again; each one is marked "jev:".
+# osworld-v2.1), changed only to build JevAgent (with the required --ocr), to point it at each
+# task's result folder, and to read AWS's image map only for the AWS provider. To take an OSWorld
+# update, re-copy that file at the new commit and make the same changes again; each one is marked
+# "jev:".
 from __future__ import annotations
 import _repo_path  # noqa: F401
 
@@ -202,16 +203,21 @@ def run_env_tasks(task_queue: Queue, args: argparse.Namespace, shared_scores: li
     active_environments = []
     env = None
     try:
-        from desktop_env.providers.aws.manager import IMAGE_ID_MAP
-        REGION = args.region
         screen_size = (args.screen_width, args.screen_height)
-        ami_id = IMAGE_ID_MAP[REGION].get(screen_size, IMAGE_ID_MAP[REGION][(1920, 1080)])
+        # jev: the AMI map is AWS's, and importing it raises without AWS_REGION, so only AWS reads
+        # it; other providers get no region and DesktopEnv's default snapshot, as OSWorld's
+        # run_multienv_gpt_response_api.py does
+        REGION, snapshot_name = None, "init_state"
+        if args.provider_name == "aws":
+            from desktop_env.providers.aws.manager import IMAGE_ID_MAP
+            REGION = args.region
+            snapshot_name = IMAGE_ID_MAP[REGION].get(screen_size, IMAGE_ID_MAP[REGION][(1920, 1080)])
         env = DesktopEnv(
             path_to_vm=args.path_to_vm,
             action_space=args.action_space,
             provider_name=args.provider_name,
             region=REGION,
-            snapshot_name=ami_id,
+            snapshot_name=snapshot_name,
             screen_size=screen_size,
             headless=args.headless,
             os_type="Ubuntu",

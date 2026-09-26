@@ -108,6 +108,48 @@ def test_the_older_tuple_of_lists_shape_reads_the_same(rapid):
     assert rapid.lines_of((None, [0.1])) == []
 
 
+# ----- boxes around the ink -------------------------------------------------------------------
+
+
+def page(background: str = "white", ink: str = "black", strokes=((50, 40, 120, 55),)):
+    """A grey page with dark (or light) bars standing in for lines of text."""
+    from PIL import Image, ImageDraw
+
+    image = Image.new("L", (240, 200), background)
+    draw = ImageDraw.Draw(image)
+    for stroke in strokes:
+        draw.rectangle((stroke[0], stroke[1], stroke[2] - 1, stroke[3] - 1), fill=ink)
+    return image
+
+
+def test_a_padded_box_shrinks_to_the_ink_inside_it(rapid):
+    assert rapid.hug_ink(page(), (38.4, 29.6, 131.0, 66.2)) == (50.0, 40.0, 120.0, 55.0)
+
+
+def test_light_text_on_a_dark_page_is_ink_too(rapid):
+    assert rapid.hug_ink(page("black", "white"), (40.0, 30.0, 130.0, 65.0)) == (50.0, 40.0, 120.0, 55.0)
+
+
+def test_a_box_with_no_ink_or_off_the_image_stays_as_it_is(rapid):
+    assert rapid.hug_ink(page(), (150.0, 100.0, 200.0, 140.0)) == (150.0, 100.0, 200.0, 140.0)
+    assert rapid.hug_ink(page(), (300.0, 300.0, 340.0, 320.0)) == (300.0, 300.0, 340.0, 320.0)
+
+
+def test_hugged_menu_entries_stay_apart_where_padded_ones_read_as_one_paragraph(rapid):
+    """Chrome's settings sidebar at 1x: 16-pixel text every 40 pixels, which RapidOCR boxes 25 high."""
+    from typesafe_computer_use.perception import merge_blocks
+
+    tops = (345, 385, 425)
+    image = page(strokes=[(128, top + 5, 220, top + 20) for top in (y - 300 for y in tops)])
+    padded = [
+        (name, 1.0, (126.0, top - 300.0, 222.0, top - 300.0 + 26.0))
+        for name, top in zip(("Appearance", "Search engine", "Default browser"), tops, strict=True)
+    ]
+    assert [text for text, _, _ in merge_blocks(padded)] == ["Appearance Search engine Default browser"]
+    hugged = [(text, score, rapid.hug_ink(image, box)) for text, score, box in padded]
+    assert [text for text, _, _ in merge_blocks(hugged)] == ["Appearance", "Search engine", "Default browser"]
+
+
 def test_importing_the_backend_loads_no_models(rapid):
     assert rapid._engine.cache_info().currsize == 0
 

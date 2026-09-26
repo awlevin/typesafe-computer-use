@@ -160,11 +160,19 @@ done
 for lib in libGL.so.1 libglib-2.0.so.0; do
   ldconfig -p | grep -q "$lib" || missing+=("$lib")
 done
+command -v gcc >/dev/null || missing+=(gcc)
+[[ -e /usr/include/linux/input.h ]] || missing+=(linux/input.h)
+python3 -c 'import sysconfig, os, sys; sys.exit(not os.path.exists(os.path.join(sysconfig.get_path("include"), "Python.h")))' ||
+  missing+=(Python.h)
 if ((${#missing[@]})); then
   log "installing packages for ${missing[*]}"
   apt_get update
   # libgl1 and libglib2.0-0: rapidocr's opencv-python (not headless) loads libGL and GLib at import.
-  apt_get install git rsync curl ca-certificates python3 libgl1 libglib2.0-0
+  # build-essential, linux-libc-dev, and python3-dev: OSWorld's lock builds some packages from
+  # source, among them evdev (pynput's), a C extension that compiles against the kernel's input
+  # headers and against Python.h of the system Python 3.12 that uv picks for OSWorld's venv.
+  apt_get install git rsync curl ca-certificates python3 python3-dev libgl1 libglib2.0-0 \
+    build-essential linux-libc-dev
 fi
 
 if ! dpkg-query -W -f='${Status}' docker-ce 2>/dev/null | grep -q 'install ok installed'; then

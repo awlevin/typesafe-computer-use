@@ -587,7 +587,7 @@ scripts/osworld-gcp watch                                 # during a run: the ta
 scripts/osworld-gcp status                                # running or stopped, and since when
 scripts/osworld-gcp stop                                  # stop now; the disk stays
 scripts/osworld-gcp pull-results                          # copy every result back, after an interrupted run
-scripts/osworld-gcp ssh                                   # a shell on the machine, for debugging
+scripts/osworld-gcp ssh [-- COMMAND]                      # a shell on the machine, or one command
 scripts/osworld-gcp down                                  # destroy everything infra/gcp made
 ```
 
@@ -595,7 +595,8 @@ scripts/osworld-gcp down                                  # destroy everything i
 machine's project, zone, and name in `.osworld/gcp.json`, so the other commands need no Terraform.
 
 The machine is long-lived: a run starts it when it is stopped, and waits for its startup script.
-The first boot installs Docker, uv, this repo, and OSWorld (`scripts/osworld setup`, with
+The first boot installs Docker, uv, a C toolchain with the kernel and Python headers (OSWorld's lock
+builds a few packages from source), this repo, and OSWorld (`scripts/osworld setup`, with
 `OSWORLD_PROVIDER=docker` and the `rapidocr` extra), which takes several minutes; later boots only
 check, and a run starts in about a minute. On the machine, the repo is `/opt/typesafe-computer-use`,
 owned by an unprivileged `osworld` user, and the startup log is `/var/log/osworld-startup.log`.
@@ -693,7 +694,9 @@ scripts/osworld results                                  # each task's score, st
 pinned in `scripts/osworld` into `.osworld/OSWorld-V2`, installs OSWorld's locked dependencies
 with its `full` extra into its own `.venv`, installs jev into that `.venv`, and copies
 `osworld_overlay/` over the checkout: `mm_agents/jev_agent.py`, and
-`scripts/python/run_multienv_jev.py`, OSWorld's generic runner changed only to build `JevAgent`.
+`scripts/python/run_multienv_jev.py`, OSWorld's generic runner changed only to build `JevAgent`
+and to leave AWS's image map to the AWS provider. Every run copies the overlay again, so an edit to
+it needs no second `setup`.
 With `OSWORLD_OCR=rapidocr` it installs jev's RapidOCR extra too. `setup --v2-tasks` also
 downloads OSWorld 2.0's tasks, a gated Hugging Face dataset, and needs `HF_TOKEN`; a 2.0 task is
 `tasks/<id>`.
@@ -712,7 +715,13 @@ is inside, as `jev/`, so `clicker --image` replays any step; its `run.json` hold
 model and the OCR backend, provider, and architecture the run used, and `results` shows them. jev
 reads `screenshot_a11y_tree` observations and Luna the GPT script's default, `screenshot`, so
 compare their times with that in mind. OSWorld's runner skips a task that already has a result,
-so a rerun first moves the earlier one to `results/archive/<time>/`.
+so a rerun first moves the earlier one to `results/archive/<time>/`; `scripts/osworld-gcp` moves
+its local copy aside the same way before a run, so a pull never mixes two runs' files.
+
+OSWorld keeps no accessibility tree. With `JEV_OSWORLD_SAVE_A11Y=1` (in the environment or `.env`),
+jev saves each observation's raw tree in its run folder as `obs-NNN-a11y.xml`, counting from `000`,
+the task's first; that is what a mismatch between the tree and `osworld/a11y.py` is diagnosed from.
+`tests/fixtures/osworld/` holds trees captured that way.
 
 To take an OSWorld update, change `OSWORLD_COMMIT` in `scripts/osworld`, and `OSWORLD_RELEASE`
 with it, the benchmark release that commit names. Copy OSWorld's `scripts/python/run_multienv.py`

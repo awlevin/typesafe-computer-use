@@ -16,7 +16,7 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import replace
 
-from ..ax_walk import AxAttrs, Frame, walk_actionable
+from ..ax_walk import AX_PRESS, AxAttrs, Frame, walk_actionable
 from ..models import AxNode, Field
 
 # The namespaces of OSWorld's Ubuntu tree: `_accessibility_ns_map["ubuntu"]` in `src/accessibility.py`
@@ -25,6 +25,15 @@ from ..models import AxNode, Field
 NS_STATE = "https://accessibility.ubuntu.example.org/ns/state"
 NS_ATTRIBUTES = "https://accessibility.ubuntu.example.org/ns/attributes"
 NS_COMPONENT = "https://accessibility.ubuntu.example.org/ns/component"
+NS_ACTION = "https://accessibility.ubuntu.example.org/ns/action"
+
+# The AT-SPI actions that mean "this is what a click does", the ones Chromium on a Mac turns into
+# AXPress. Each action is serialized as `act:<name>_desc`. Left out: `doDefault`, which nearly every
+# node carries, `clickAncestor`, the text inside a link, and `showContextMenu`.
+PRESS_ACTIONS = ("activate", "check", "click", "jump", "open", "press", "select", "uncheck")
+# Roles a click always works on, whatever actions they list: Chrome's own menus (its app menu,
+# a context menu) offer only `doDefault` on their items.
+CLICK_ROLES = {"menu-item", "check-menu-item", "radio-menu-item"}
 
 # AT-SPI roles onto the AX names `ax_walk` and `models` know. `password-text` gets a role of its own
 # that is never a text role, so jev never types into a password field.
@@ -38,6 +47,16 @@ ROLES = {
     "page-tab": "AXTab",
     "list-item": "AXRow",
     "menu-item": "AXMenuItem",
+    "check-menu-item": "AXMenuItem",
+    "radio-menu-item": "AXMenuItem",
+    # What Chrome's pages and settings are built from, as macOS names them: a toggle button (a
+    # pressed/unpressed button, a switch) is a checkbox there, as it is for Chrome on a Mac.
+    "toggle-button": "AXCheckBox",
+    "radio-button": "AXRadioButton",
+    "slider": "AXSlider",
+    "spin-button": "AXIncrementor",
+    "table-cell": "AXCell",
+    "tree-item": "AXRow",
     # A list row keeps its label in a text child, which the walk recovers only from AXStaticText.
     "static": "AXStaticText",
     "label": "AXStaticText",
@@ -90,6 +109,14 @@ def label(element: ET.Element | None) -> str:
         return own
     content = " ".join(text(element).split())
     return content if len(content) <= LABEL_TEXT_CHARS else ""
+
+
+def placeholder(element: ET.Element | None) -> str:
+    """The hint an empty field shows. Chromium calls the attribute `placeholder`, GTK
+    `placeholder-text`."""
+    if element is None:
+        return ""
+    return element.get(f"{{{NS_ATTRIBUTES}}}placeholder") or element.get(f"{{{NS_ATTRIBUTES}}}placeholder-text") or ""
 
 
 def _pair(value: str | None) -> tuple[float, float] | None:
@@ -155,7 +182,7 @@ def focused_field(root: ET.Element | None) -> Field | None:
     return Field(
         role=ax_role(element.tag),
         label=name(element),
-        placeholder=element.get(f"{{{NS_ATTRIBUTES}}}placeholder-text") or "",
+        placeholder=placeholder(element),
         value="" if element.tag == "password-text" else text(element),
         x=x,
         y=y,
@@ -186,17 +213,31 @@ def _attrs(element: ET.Element) -> AxAttrs:
     return AxAttrs(ax_role(element.tag), label(element), frame(element))
 
 
-def _no_actions(_element: ET.Element) -> list[str]:
-    return []
+def clicks(element: ET.Element) -> bool:
+    """Whether the element answers a click: it is a menu item, or it offers one of `PRESS_ACTIONS`.
+    Neither is a control role on a Mac, where a menu's items are read as text and a web page's
+    clickable nodes take AXPress; this is how the walk knows them anyway. A password field is never
+    offered as one."""
+    if element.tag == "password-text":
+        return False
+    if element.tag in CLICK_ROLES:
+        return True
+    return any(f"{{{NS_ACTION}}}{action}_desc" in element.attrib for action in PRESS_ACTIONS)
+
+
+def _actions(element: ET.Element) -> list[str]:
+    return [AX_PRESS] if clicks(element) else []
 
 
 def walk(app: ET.Element | None, display_w: float, display_h: float) -> tuple[list[AxNode], list[AxNode], bool]:
     """Labelled on-screen controls under `app`, in the shape `Desktop.actionable_elements` returns.
 
-    Nothing in a VM can be pressed through this tree, so no node is pressable, none carries an
-    element ref, and the off-screen list, which exists only for pressing, stays off and empty.
+    A control is a node with a control role, or one that answers a click, as a Mac walk keeps
+    whatever takes AXPress. But nothing in a VM can be pressed through this tree: no node comes back
+    pressable, none carries an element ref, and the off-screen list, which exists only for pressing,
+    stays off and empty.
     """
     if app is None:
         return [], [], False
-    found, _offscreen, capped = walk_actionable(app, list, _attrs, _no_actions, display_w, display_h, offscreen_cap=0)
-    return [replace(node, ref=None) for node in found], [], capped
+    found, _offscreen, capped = walk_actionable(app, list, _attrs, _actions, display_w, display_h, offscreen_cap=0)
+    return [replace(node, ref=None, pressable=False) for node in found], [], capped
