@@ -541,6 +541,86 @@ still wants the OCR path.
   days", "Free Shipping", "Local Pickup") that the app does not publish through
   accessibility is one click target, aimed at its middle.
 
+## Run in Google Cloud
+
+OSWorld runs each task in an Ubuntu VM under KVM, so it needs a Linux host with KVM, which a Mac
+is not. `infra/gcp` describes one such machine on Compute Engine, and `scripts/osworld-gcp` drives
+it from here: it starts the machine, syncs your working copy to it, runs the task there with the
+output streamed to your terminal, and copies the results back into `results/`. A local edit
+applies to the next run with no commit. Locally it needs only `terraform`, `gcloud`, and `rsync`.
+
+You need:
+
+- Terraform 1.9 or later, and the gcloud CLI signed in twice: `gcloud auth login` for SSH, and
+  `gcloud auth application-default login` for Terraform.
+- A Google Cloud project with billing and the Compute Engine API on, where nested virtualization is
+  allowed: the organization policy `constraints/compute.disableNestedVirtualization` must not be
+  enforced.
+- To create the machine (`up`, `down`): the Editor role, since Terraform also makes a firewall rule,
+  a Cloud Router and NAT, and turns APIs on. For the nightly stop it also lets Compute Engine's
+  service agent stop the machine, which takes permission to change the project's IAM policy; Owner
+  has both. Without that permission, set `grant_schedule_permission = false` and have an
+  administrator grant `roles/compute.instanceAdmin.v1` to
+  `service-PROJECT_NUMBER@compute-system.iam.gserviceaccount.com`, or set `nightly_stop_hour = null`.
+- To use it (every other command): Editor or Compute Instance Admin (v1). Both include OS Admin
+  Login, which the script needs to act as the machine's `osworld` user.
+- With `ssh = "iap"` (the default), also the IAP-secured Tunnel User role
+  (`roles/iap.tunnelResourceAccessor`), which Editor does not include. Terraform turns the IAP API
+  on.
+- For the optional budget, the Billing Account Costs Manager role on the billing account.
+
+```
+cp infra/gcp/terraform.tfvars.example infra/gcp/terraform.tfvars   # set project, region, zone
+scripts/osworld-gcp up                                    # terraform apply; the machine sets itself up
+scripts/osworld-gcp run-jev chrome/<id> --ocr rapidocr    # start, sync, run, copy the results back
+scripts/osworld-gcp run-luna chrome/<id>                  # the same with OSWorld's GPT agent
+scripts/osworld-gcp watch                                 # during a run: the task VM's screen, in a browser
+scripts/osworld-gcp status                                # running or stopped, and since when
+scripts/osworld-gcp stop                                  # stop now; the disk stays
+scripts/osworld-gcp pull-results                          # copy every result back, after an interrupted run
+scripts/osworld-gcp ssh                                   # a shell on the machine, for debugging
+scripts/osworld-gcp down                                  # destroy everything infra/gcp made
+```
+
+`--dry-run` before any command prints each command it would run and runs none. `up` caches the
+machine's project, zone, and name in `.osworld/gcp.json`, so the other commands need no Terraform.
+
+The machine is long-lived: a run starts it when it is stopped, and waits for its startup script.
+The first boot installs Docker, uv, this repo, and OSWorld (`scripts/osworld setup`, with
+`OSWORLD_PROVIDER=docker` and the `rapidocr` extra), which takes several minutes; later boots only
+check, and a run starts in about a minute. On the machine, the repo is `/opt/typesafe-computer-use`,
+owned by an unprivileged `osworld` user, and the startup log is `/var/log/osworld-startup.log`.
+
+SSH has two modes, set by `ssh` in `terraform.tfvars`:
+
+- `iap` (default): no external IP and no open ports. Port 22 accepts only Google's IAP range, and
+  the machine reaches the internet through a Cloud NAT that Terraform creates for its subnetwork
+  (`create_nat = false` when the network has one already).
+- `external_ip`: an external IP, with port 22 open to `ssh_source_cidr`, for projects where IAP is
+  not granted. Many projects' `default` network also has a `default-allow-ssh` rule open to every
+  address, which this mode does not remove; check the network's firewall rules.
+
+Either way, login goes through OS Login. Your `.env` is copied over SSH before each run into a file
+only the `osworld` user can read (mode 600), and is never printed. It never enters Terraform state,
+and the machine has no service account, so it holds no Google Cloud credentials.
+
+Three guards keep a forgotten machine from running up a bill, all on by default:
+
+| guard | what it does | setting |
+|---|---|---|
+| idle shutdown | a timer on the machine checks every 5 minutes and powers it off once no `run_multienv` process has run and no SSH connection has been open for that long | `idle_shutdown_minutes` (60; 0 turns it off) |
+| nightly stop | an instance schedule stops the machine every day | `nightly_stop_hour` (2) in `time_zone` (`Etc/UTC`); `null` turns it off |
+| budget | email alerts to the billing account's administrators at 50, 90, and 100 percent of a monthly budget on this machine's cost | `billing_account` (empty: no budget), `budget_usd` (50) |
+
+The machine is also Spot by default (`spot = true`): Google may stop it at any time, which costs
+only a rerun of the task. Every resource that takes labels carries `app = "typesafe-computer-use"`
+and `purpose = "osworld"`, so a shared project can find and bill them.
+
+Cost, for the default `n2-standard-8` (check current prices for your region): about $0.17 an hour
+Spot, about $0.31 to $0.39 an hour on demand, and about $10 a month for the 150 GB disk, stopped or
+not. Cloud NAT adds a little per running hour and about $0.045 per GB it carries, most of it the
+one-time download of OSWorld's VM image.
+
 ## Development
 
 ```
@@ -549,7 +629,9 @@ uv run pytest -q
 ```
 
 CI runs the same on macOS, and the tests again on Linux: they are pure logic, and
-`tests/conftest.py` stands in for the platform modules where they cannot be installed.
+`tests/conftest.py` stands in for the platform modules where they cannot be installed. A third job
+checks `infra/gcp` (format, validation, and `terraform test` against mock providers) and
+`scripts/osworld-gcp`, with no cloud credentials.
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Growing the architecture

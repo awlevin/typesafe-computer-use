@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+# Run OSWorld tasks on the Google Cloud machine that infra/gcp describes. The machine lives on:
+# a run starts it when stopped, and it stops itself when idle and every night.
+#
+#   scripts/osworld-gcp up                           create or update the machine (terraform apply)
+#   scripts/osworld-gcp run-jev DOMAIN/ID --ocr OCR  start it, sync this copy, run jev on one task,
+#                                                    copy the results back into results/
+#   scripts/osworld-gcp run-luna DOMAIN/ID           the same with OSWorld's GPT agent on gpt-6-luna
+#   scripts/osworld-gcp watch                        forward the task VM's screen; prints the URL
+#   scripts/osworld-gcp status                       running or stopped, and since when
+#   scripts/osworld-gcp stop                         stop the machine now; its disk stays
+#   scripts/osworld-gcp pull-results                 copy every result on the machine into results/
+#   scripts/osworld-gcp ssh                          a shell on the machine, for debugging
+#   scripts/osworld-gcp down                         destroy the machine and all infra/gcp made
+#
+# --dry-run before any command prints each command it would run, prefixed "+ ", and runs none.
+# Settings live in infra/gcp/terraform.tfvars (see terraform.tfvars.example) or TF_VAR_*. `up`
+# caches the machine's project, zone, name, and SSH mode in .osworld/gcp.json, so the other
+# commands need no terraform.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+TF=(terraform -chdir=infra/gcp)
+TFVARS=infra/gcp/terraform.tfvars
+TFSTATE=infra/gcp/terraform.tfstate
+CACHE=.osworld/gcp.json
+REMOTE_USER=osworld                 # infra/gcp/startup.sh: USER_NAME
+REMOTE_DIR=/opt/typesafe-computer-use # infra/gcp/startup.sh: REPO_DIR
+READY_TIMEOUT=${OSWORLD_GCP_READY_TIMEOUT:-1800} # seconds; a first boot installs everything
+WATCH_PORT=${OSWORLD_GCP_WATCH_PORT:-8006}       # local port for `watch`
+VNC_PORT=8006 # the web VNC viewer's port inside OSWorld's Docker provider container
+
+# Never synced, and so never deleted on the machine either: git and tool state (.git has no
+# trailing slash because it is a file in a git worktree), local runs and results, secrets (.env
+# goes separately, mode 600), and personal Terraform files.
+SYNC_EXCLUDES=(
+  /.git /.venv/ /.osworld/ /.private/ /.claude/ /.agents/ /runs/ /results/ /inspections/ /dist/
+  /.env /infra/gcp/.terraform/ /infra/gcp/terraform.tfvars '/infra/gcp/*.tfstate*'
+  __pycache__/ .pytest_cache/ .ruff_cache/ .DS_Store
+)
+# rsync reaches the machine through `gcloud compute ssh`, which already knows the way (IAP or the
+# external IP), the OS Login key, and the host key. rsync calls its remote shell as
+# `RSH HOST COMMAND...`, while gcloud wants the command in --command, so rsync calls this script,
+# which OSWORLD_GCP_RSH turns into that shim (see the end of this file). Owner and group are not
+# copied: the files belong to the osworld user on the machine and to you here.
+RSYNC=(env OSWORLD_GCP_RSH=1 rsync -rlpt -e scripts/osworld-gcp --rsync-path="sudo -u $REMOTE_USER rsync")
+
+usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
+say() { printf '%s\n' "$*" >&2; }
+die() {
+  say "osworld-gcp: $*"
+  exit 1
+}
+
+DRY_RUN=false
+if [[ -n ${OSWORLD_GCP_RSH:-} ]]; then
+  set -- _rsh "$@"
+elif [[ ${1:-} == --dry-run ]]; then
+  DRY_RUN=true
+  shift
+fi
+
+# One argument as the shell would need it typed.
+quote() {
+  if [[ $1 =~ ^[A-Za-z0-9_@%+=:,./-]+$ ]]; then
+    printf '%s' "$1"
+  else
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+  fi
+}
+cmdline() {
+  local out="" arg
+  for arg in "$@"; do out+="${out:+ }$(quote "$arg")"; done
+  printf '%s' "$out"
+}
+show() { say "+ $(cmdline "$@")"; }
+
+# Print a command, then run it unless this is a dry run.
+run() {
+  show "$@"
+  $DRY_RUN || "$@"
+}
+
+# Print a command and print its output; a dry run prints $1 in its place.
+query() {
+  local stand_in=$1
+  shift
+  show "$@"
+  if $DRY_RUN; then printf '%s\n' "$stand_in"; else "$@"; fi
+}
+
+# The string value of a variable in terraform.tfvars, which Terraform prefers, or TF_VAR_<name>.
+tfvar() {
+  local value="" env="TF_VAR_$1"
+  if [[ -f $TFVARS ]]; then
+    value=$(sed -n -E "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$TFVARS" | tail -n 1)
+  fi
+  printf '%s' "${value:-${!env:-}}"
+}
+
+cached() { sed -n -E "s/^[[:space:]]*\"$1\": \"([^\"]*)\".*/\1/p" "$CACHE"; }
+
+write_cache() {
+  local project zone instance ssh
+  project=$(query '<project>' "${TF[@]}" output -raw project)
+  zone=$(query '<zone>' "${TF[@]}" output -raw zone)
+  instance=$(query '<instance>' "${TF[@]}" output -raw instance_name)
+  ssh=$(query '<ssh>' "${TF[@]}" output -raw ssh)
+  show mkdir -p .osworld
+  say "+ (write $CACHE)"
+  $DRY_RUN && return
+  mkdir -p .osworld
+  printf '{\n  "project": "%s",\n  "zone": "%s",\n  "instance": "%s",\n  "ssh": "%s"\n}\n' \
+    "$project" "$zone" "$instance" "$ssh" >"$CACHE"
+}
+
+# Sets PROJECT, ZONE, INSTANCE, SSH_MODE, and the gcloud commands that reach the machine.
+load() {
+  if [[ ! -f $CACHE && -s $TFSTATE ]] && ! $DRY_RUN; then write_cache; fi
+  if [[ -f $CACHE ]]; then
+    PROJECT=$(cached project)
+    ZONE=$(cached zone)
+    INSTANCE=$(cached instance)
+    SSH_MODE=$(cached ssh)
+  elif $DRY_RUN; then
+    say "(dry run: no $CACHE yet, so values come from $TFVARS, TF_VAR_*, and defaults)"
+    PROJECT=$(tfvar project)
+    ZONE=$(tfvar zone)
+    INSTANCE=$(tfvar instance_name)
+    SSH_MODE=$(tfvar ssh)
+    PROJECT=${PROJECT:-<project>}
+    ZONE=${ZONE:-<zone>}
+    INSTANCE=${INSTANCE:-osworld}
+    SSH_MODE=${SSH_MODE:-iap}
+  else
+    die "no machine yet: run scripts/osworld-gcp up"
+  fi
+  GC=(--project "$PROJECT" --zone "$ZONE")
+  SSH=(gcloud compute ssh "$INSTANCE" "${GC[@]}")
+  if [[ $SSH_MODE == iap ]]; then SSH+=(--tunnel-through-iap); fi
+}
+
+# Runs the rest of a remote command as the osworld user, in the repo, with uv on PATH and the keys
+# from .env; startup.sh installs osworld-exec.
+REMOTE_EXEC="sudo -u $REMOTE_USER -H osworld-exec"
+
+# Compute Engine calls a stopped machine TERMINATED.
+plain_status() {
+  case $1 in
+    TERMINATED | STOPPED) echo stopped ;;
+    '') echo missing ;;
+    *) printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]' ;;
+  esac
+}
+
+machine_status() {
+  query "${1:-TERMINATED}" gcloud compute instances describe "$INSTANCE" "${GC[@]}" --format='value(status)'
+}
+
+start_if_stopped() {
+  local status tries=0
+  status=$(machine_status)
+  while [[ $status == STOPPING || $status == SUSPENDING ]] && ((tries++ < 60)); do
+    say "the machine is $(plain_status "$status"); waiting for it to finish"
+    sleep 5
+    status=$(machine_status)
+  done
+  case $status in
+    RUNNING | PROVISIONING | STAGING | REPAIRING) ;;
+    TERMINATED | STOPPED)
+      $DRY_RUN && say "(dry run: assuming the machine is stopped)"
+      run gcloud compute instances start "$INSTANCE" "${GC[@]}" ||
+        die "the machine did not start. Spot capacity may be short in $ZONE: try again, or set spot = false or another zone in $TFVARS and run up"
+      ;;
+    SUSPENDED) run gcloud compute instances resume "$INSTANCE" "${GC[@]}" ;;
+    *) die "the machine is $(plain_status "$status"); scripts/osworld-gcp up creates it" ;;
+  esac
+}
+
+# What the startup script has done this boot: ready, failed, or booting. Empty while SSH is down.
+PROBE="if [ -e /run/osworld-ready ]; then echo ready; elif [ -e /run/osworld-startup.failed ]; then echo failed; else echo booting; fi"
+
+# Wait until SSH answers; with `ready`, until the startup script has finished too.
+wait_for_machine() {
+  local want=${1:-} state err deadline=$((SECONDS + READY_TIMEOUT))
+  if $DRY_RUN; then
+    show "${SSH[@]}" --command "$PROBE"
+    return
+  fi
+  [[ $want == ready ]] && say "waiting for the machine's startup script (a first boot installs everything and takes longest)"
+  err=$(mktemp)
+  while :; do
+    state=$("${SSH[@]}" --command "$PROBE" </dev/null 2>"$err" || true)
+    state=${state//$'\r'/}
+    state=${state##*$'\n'} # a first connection may print key generation above the answer
+    case $state in
+      ready) break ;;
+      failed)
+        "${SSH[@]}" --command 'tail -n 40 /var/log/osworld-startup.log' </dev/null >&2 || true
+        [[ $want == ready ]] && die "the machine's startup script failed; above is the end of /var/log/osworld-startup.log"
+        break
+        ;;
+      booting) [[ $want == ready ]] || break ;;
+    esac
+    if ((SECONDS >= deadline)); then
+      cat "$err" >&2
+      rm -f "$err"
+      die "the machine was not ${want:-reachable} after ${READY_TIMEOUT}s (OSWORLD_GCP_READY_TIMEOUT)"
+    fi
+    printf '.' >&2
+    sleep 10
+  done
+  rm -f "$err"
+  say "the machine is ${state}"
+}
+
+sync_repo() {
+  local excludes=() pattern
+  for pattern in "${SYNC_EXCLUDES[@]}"; do excludes+=("--exclude=$pattern"); done
+  run "${RSYNC[@]}" --delete "${excludes[@]}" ./ "$INSTANCE:$REMOTE_DIR/"
+
+  # The keys go over SSH into a file only the osworld user can read, and are never printed.
+  if [[ ! -f .env ]]; then
+    say "no .env here, so none is copied; the machine keeps the one it has, if any"
+    return
+  fi
+  local remote="umask 077 && sudo -u $REMOTE_USER tee $REMOTE_DIR/.env >/dev/null && sudo -u $REMOTE_USER chmod 600 $REMOTE_DIR/.env"
+  say "+ $(cmdline "${SSH[@]}" --command "$remote") < .env"
+  $DRY_RUN || "${SSH[@]}" --command "$remote" <.env
+}
+
+pull_results() {
+  run mkdir -p results
+  run "${RSYNC[@]}" "$INSTANCE:$REMOTE_DIR/results/" results/
+}
+
+# run-jev and run-luna: start, sync, run on the machine with its output streamed here, pull.
+run_task() {
+  local command=$1 arg args="" status=0
+  shift
+  if [[ ! ${1:-} =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    if [[ $command == run-jev ]]; then die "usage: scripts/osworld-gcp run-jev DOMAIN/ID --ocr OCR"; fi
+    die "usage: scripts/osworld-gcp run-luna DOMAIN/ID"
+  fi
+  if [[ $command == run-jev && " $* " != *" --ocr "* && " $* " != *" --ocr="* ]]; then
+    die "run-jev needs --ocr: rapidocr on this Linux machine (vision is the macOS backend)"
+  fi
+  for arg in "$@"; do args+=" $(quote "$arg")"; done
+
+  load
+  start_if_stopped
+  wait_for_machine ready
+  sync_repo
+
+  # A terminal gets a remote terminal too, so Ctrl-C stops the run on the machine.
+  local tty=()
+  if [[ -t 0 && -t 1 ]]; then tty=(--ssh-flag=-t); fi
+  run "${SSH[@]}" --command "$REMOTE_EXEC scripts/osworld $command$args" ${tty[@]+"${tty[@]}"} || status=$?
+
+  pull_results || say "no results came back"
+  run "${SSH[@]}" --command "$REMOTE_EXEC scripts/osworld results" </dev/null || true
+  return "$status"
+}
+
+uptime_since() {
+  local ts=$1 base offset start
+  base=${ts:0:19}
+  offset=${ts:${#ts}-6}
+  offset=${offset/:/}
+  start=$(date -d "$ts" +%s 2>/dev/null ||
+    date -j -f '%Y-%m-%dT%H:%M:%S%z' "$base$offset" +%s 2>/dev/null) || return 0
+  local seconds=$(($(date +%s) - start))
+  printf '%dh %dm' $((seconds / 3600)) $((seconds % 3600 / 60))
+}
+
+case "${1:-}" in
+  up)
+    shift
+    if [[ ! -f $TFVARS && -z ${TF_VAR_project:-} ]]; then
+      $DRY_RUN || die "copy infra/gcp/terraform.tfvars.example to $TFVARS and fill it in first"
+      say "(dry run: no $TFVARS yet)"
+    fi
+    run "${TF[@]}" init -input=false
+    run "${TF[@]}" apply "$@"
+    write_cache
+    say "the machine sets itself up on its first boot; scripts/osworld-gcp run-jev DOMAIN/ID --ocr rapidocr waits for that"
+    ;;
+  down)
+    shift
+    run "${TF[@]}" destroy "$@"
+    run rm -f "$CACHE"
+    ;;
+  stop)
+    load
+    run gcloud compute instances stop "$INSTANCE" "${GC[@]}"
+    ;;
+  status)
+    load
+    line=$(query 'RUNNING 2026-01-01T00:00:00.000-00:00' gcloud compute instances describe "$INSTANCE" "${GC[@]}" \
+      --format='value(status,lastStartTimestamp)') || die "no machine $INSTANCE in $PROJECT, $ZONE"
+    $DRY_RUN && exit 0
+    read -r state started <<<"$line"
+    if [[ $state == RUNNING ]]; then
+      echo "$INSTANCE: running since $started ($(uptime_since "$started"))"
+    else
+      echo "$INSTANCE: $(plain_status "$state")"
+    fi
+    ;;
+  run-jev | run-luna)
+    run_task "$@"
+    ;;
+  watch)
+    load
+    status=$(machine_status RUNNING)
+    [[ $status == RUNNING ]] || die "the machine is $(plain_status "$status"): start a run first, then watch it"
+    # The Docker provider publishes the container's VNC port on the first free host port from
+    # 8006, so read the mapping from the running container.
+    ports=$(query "0.0.0.0:$VNC_PORT->$VNC_PORT/tcp" "${SSH[@]}" \
+      --command "sudo -u $REMOTE_USER -H docker ps --format {{.Ports}}" </dev/null)
+    port=$(printf '%s\n' "$ports" | grep -o "[0-9]*->$VNC_PORT/tcp" | head -n 1 | cut -d- -f1 || true)
+    [[ -n $port ]] || die "no OSWorld VM is running on the machine: start a run, then watch it"
+    say "watch the task VM at http://localhost:$WATCH_PORT/ (Ctrl-C closes the tunnel)"
+    run "${SSH[@]}" -- -N -L "$WATCH_PORT:localhost:$port"
+    ;;
+  ssh)
+    load
+    start_if_stopped
+    wait_for_machine
+    say "the repo is $REMOTE_DIR, owned by $REMOTE_USER: sudo -iu $REMOTE_USER"
+    run "${SSH[@]}"
+    ;;
+  pull-results)
+    load
+    pull_results
+    ;;
+  _rsh)
+    # rsync's remote shell: `HOST COMMAND...` (and -l USER, which is unused) to gcloud compute ssh.
+    shift
+    if [[ ${1:-} == -l ]]; then shift 2; fi
+    shift # the host, which is always the cached instance
+    unset OSWORLD_GCP_RSH
+    load
+    exec "${SSH[@]}" --quiet --command "$*"
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

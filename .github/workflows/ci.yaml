@@ -27,3 +27,20 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --frozen --python 3.12
       - run: uv run pytest -q
+
+  # infra/gcp and scripts/osworld-gcp, checked with no credentials: nothing here reaches a cloud.
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive infra/gcp
+      - run: terraform -chdir=infra/gcp init -backend=false -input=false
+      - run: terraform -chdir=infra/gcp validate
+      - run: terraform -chdir=infra/gcp test
+      - run: bash -n scripts/osworld-gcp && bash -n infra/gcp/startup.sh
+      - run: shellcheck scripts/osworld-gcp infra/gcp/startup.sh
+      - run: scripts/osworld-gcp --dry-run status
