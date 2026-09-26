@@ -1,0 +1,30 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. Only the first three are required; every
+# other line shows its default. variables.tf says what each one does.
+
+project = "your-project-id"
+region  = "us-central1"
+zone    = "us-central1-a"
+
+# instance_name = "osworld"
+# network       = "default"
+# subnetwork    = null # the one named like the network
+
+# SSH: "iap" (no external IP) or "external_ip" (then ssh_source_cidr is required).
+# ssh             = "iap"
+# ssh_source_cidr = "203.0.113.7/32"
+# create_nat      = true # false when the network already has Cloud NAT
+
+# machine_type = "n2-standard-8"
+# spot         = true
+# disk_gb      = 150
+
+# Spend guards.
+# idle_shutdown_minutes     = 60        # 0 turns it off
+# nightly_stop_hour         = 2         # null turns it off
+# time_zone                 = "Etc/UTC"
+# grant_schedule_permission = true
+# billing_account           = "000000-000000-000000" # empty (the default) makes no budget
+# budget_usd                = 50
+
+# repo_url = "https://github.com/awlevin/typesafe-computer-use"
+# repo_ref = "main"
