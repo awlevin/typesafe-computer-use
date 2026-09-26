@@ -158,14 +158,14 @@ def walk_actionable(
     found: list[AxNode] = []
     offscreen: list[AxNode] = []
     deadline = clock() + time_cap
-    queue = deque([(root, "", False, False)])
+    queue = deque([(root, "", False, False, None)])
     seen = 0
     visited: set = set()  # elements compare by identity across fetches, so a self-listing app is walked once
     visited_keys: set[tuple] = set()  # and a control handed over as several distinct objects is kept once
     while queue:
         if seen >= node_cap or clock() >= deadline:
             return found, offscreen, True
-        node, parent_label, parent_emitted, hidden = queue.popleft()
+        node, parent_label, parent_emitted, hidden, parent_key = queue.popleft()
         identity = node_identity(node)
         if identity in visited:
             continue
@@ -175,7 +175,10 @@ def walk_actionable(
         if role in AX_SKIP_SUBTREE_ROLES:
             continue
         key = subtree_key(role, own_label, frame)
-        if key is not None:
+        # A node keyed like its own parent wraps it, as AT-SPI nests nameless panels of one frame:
+        # it is no copy from elsewhere, so its subtree is walked, but it is never a second item.
+        wrapper = key is not None and key == parent_key
+        if key is not None and not wrapper:
             if key in visited_keys:
                 continue
             visited_keys.add(key)
@@ -194,7 +197,7 @@ def walk_actionable(
         # A click lands on the centre, so a node centred off the display is no item, though it
         # crosses the display. It stays reachable by AXPress, and its children are judged as their own.
         visible = not hidden and clickable(frame) and center_on_display(frame, display_w_pt, display_h_pt)
-        if label and not duplicate and not nameless_group:
+        if label and not duplicate and not nameless_group and not wrapper:
             if visible:
                 pressable = AX_PRESS in actions(node)
                 if pressable or role in AX_ACTIONABLE_ROLES:
@@ -205,5 +208,5 @@ def walk_actionable(
                 x, y, w, h = frame
                 offscreen.append(AxNode(role=role, label=label, x=x, y=y, w=w, h=h, pressable=True, ref=node))
         child_label = own_label if role in AX_LABEL_PARENT_ROLES else ""
-        queue.extend((kid, child_label, emitted, hidden) for kid in kids)
+        queue.extend((kid, child_label, emitted, hidden, key) for kid in kids)
     return found, offscreen, False

@@ -110,8 +110,7 @@ setup() {
   fi
   run_in_checkout uv pip install --python .venv -e "$jev"
 
-  # OSWorld's side of jev: the agent module and the runner that builds it.
-  run cp -R "$REPO/osworld_overlay/." "$CHECKOUT/"
+  copy_overlay
 
   run_in_checkout .venv/bin/python -c "import desktop_env, typesafe_computer_use.osworld.agent"
   run_in_checkout .venv/bin/python -c \
@@ -126,6 +125,12 @@ setup() {
     fi
   fi
   echo "OSWorld $OSWORLD_COMMIT is set up in .osworld/OSWorld-V2"
+}
+
+# OSWorld's side of jev: the agent module and the runners, copied over the checkout. Every run
+# copies them again, so an edit to osworld_overlay/ takes effect without another setup.
+copy_overlay() {
+  run cp -R "$REPO/osworld_overlay/." "$CHECKOUT/"
 }
 
 # Whether this repo's pyproject.toml declares the optional extra $1.
@@ -145,6 +150,7 @@ PY
 require_setup() {
   [[ -x "$PYTHON" && -f "$CHECKOUT/scripts/python/run_multienv_jev.py" ]] ||
     die "OSWorld is not set up here; run scripts/osworld setup first"
+  copy_overlay
 }
 
 # A task's DOMAIN/ID, checked, since both parts become paths and JSON.

@@ -38,6 +38,8 @@ NextObs = Callable[[list[str]], dict]  # hands a step's actions to OSWorld, retu
 APP_PID = 1  # stands in for the active app's process: the tree walk reads the active app, not a pid
 TYPE_INTERVAL = 0.02  # seconds between keystrokes in the VM
 BROWSER_WINDOW_CLASS = "google-chrome"  # the WM_CLASS wmctrl raises for the browser
+BROWSER_COMMAND = "google-chrome"  # how OSWorld's Chrome tasks start the browser
+RAISE_SECONDS = 0.5  # for the window manager to hand the raised window the keyboard
 
 # macOS key names, as the loop presses them, onto pyautogui's. The Mac's delete key erases backwards.
 KEYS = {"return": "enter", "escape": "esc", "delete": "backspace"}
@@ -46,9 +48,21 @@ KEYS = {"return": "enter", "escape": "esc", "delete": "backspace"}
 class OSWorldDesktop:
     """One OSWorld run's computer: the observation in hand, and the actions not yet handed over."""
 
-    def __init__(self, obs: dict, recognize_text: Callable[[Image.Image], list[OcrLine]], next_obs: NextObs) -> None:
+    def __init__(
+        self,
+        obs: dict,
+        recognize_text: Callable[[Image.Image], list[OcrLine]],
+        next_obs: NextObs,
+        *,
+        save_a11y: Path | None = None,
+    ) -> None:
+        """`save_a11y` names a folder that gets each observation's raw accessibility tree, as
+        `obs-NNN-a11y.xml` (NNN counts observations from 000, the task's first). OSWorld keeps none,
+        and the raw tree is what a mismatch in `a11y` is diagnosed from. None saves nothing."""
         self._recognize = recognize_text
         self._next_obs = next_obs
+        self._save_a11y = save_a11y
+        self._seen = 0
         self.actions: list[str] = []
         self._see(obs)
 
@@ -58,6 +72,12 @@ class OSWorldDesktop:
     # ----- the step boundary -----------------------------------------------------------------
 
     def _see(self, obs: dict) -> None:
+        tree = obs.get("accessibility_tree")
+        if self._save_a11y is not None and tree:
+            self._save_a11y.mkdir(parents=True, exist_ok=True)
+            data = tree.encode("utf-8") if isinstance(tree, str) else tree
+            (self._save_a11y / f"obs-{self._seen:03d}-a11y.xml").write_bytes(data)
+        self._seen += 1
         self._obs = obs
         self._root = a11y.parse(obs.get("accessibility_tree"))
         self._image: Image.Image | None = None
@@ -120,20 +140,17 @@ class OSWorldDesktop:
         return a11y.name(a11y.active_app(self._now())), APP_PID
 
     def activate(self, app: str, timeout: float = 3.0) -> bool:
-        """Raise the browser's window. No other app can be brought forward in the VM.
-
-        The code checks for wmctrl, so a VM without it skips the raise instead of failing the step.
-        """
+        """Bring the browser forward, starting it when it is not running (a run can close its last
+        window). No other app can be brought forward in the VM."""
         if app not in a11y.BROWSER_APPS:
             return False
-        self._do(
-            "import shutil, subprocess; "
-            f"shutil.which('wmctrl') and subprocess.run(['wmctrl', '-xa', {BROWSER_WINDOW_CLASS!r}], check=False)"
-        )
+        self._do(_browser_code(None))
         return True
 
     def open_url(self, browser: str, url: str) -> bool:
-        self._do(f"pyautogui.hotkey('ctrl', 'l'); pyautogui.write({url!r}, interval={TYPE_INTERVAL}); pyautogui.press('enter')")
+        """Open `url` in the browser: in the front tab of its raised window when it runs, as the
+        address bar would, or as the page it starts on when it does not."""
+        self._do(_browser_code(url))
         return True
 
     def browser_url(self, browser: str) -> str | None:
@@ -181,3 +198,31 @@ class OSWorldDesktop:
 
     def ax_value(self, ref) -> str | None:
         return None
+
+
+def _browser_code(url: str | None) -> str:
+    """VM code that raises the browser's window, and types `url` into its address bar, when it has
+    one, and otherwise starts the browser, on `url` when there is one.
+
+    wmctrl both raises the window and says whether there was one to raise. It starts on a line of
+    its own, after OSWorld's one-line prefix, so it can branch. The browser starts in a session of
+    its own with no pipe to the step: OSWorld waits for a step's output to close, and a browser
+    holding it would hold the step up until OSWorld's timeout. The URL is data here too, through
+    `repr()`, in the address bar and on the command line alike.
+    """
+    raised = [f"time.sleep({RAISE_SECONDS})"]
+    if url is not None:
+        raised.append(
+            f"pyautogui.hotkey('ctrl', 'l'); pyautogui.write({url!r}, interval={TYPE_INTERVAL}); pyautogui.press('enter')"
+        )
+    start = [BROWSER_COMMAND] if url is None else [BROWSER_COMMAND, url]
+    lines = [
+        "",
+        "import subprocess",
+        f"if subprocess.run(['wmctrl', '-xa', {BROWSER_WINDOW_CLASS!r}]).returncode == 0:",
+        *(f"    {line}" for line in raised),
+        "else:",
+        f"    subprocess.Popen({start!r}, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,"
+        " stderr=subprocess.DEVNULL, start_new_session=True)",
+    ]
+    return "\n".join(lines)

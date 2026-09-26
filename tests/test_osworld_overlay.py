@@ -82,6 +82,22 @@ def test_the_runner_points_the_agent_at_each_task_folder_before_running_it():
     assert source.index("example_result_dir = os.path.join(") < point < source.index("lib_run_single.run_single_example(")
 
 
+def test_the_runner_reads_the_aws_image_map_only_for_aws():
+    """Importing OSWorld's AWS manager raises without AWS_REGION, which a Docker host never sets."""
+    module = tree(RUNNER)
+    (aws,) = [
+        node
+        for node in ast.walk(module)
+        if isinstance(node, ast.ImportFrom) and node.module == "desktop_env.providers.aws.manager"
+    ]
+    guards = [
+        node
+        for node in ast.walk(module)
+        if isinstance(node, ast.If) and aws in ast.walk(node) and ast.unparse(node.test) == "args.provider_name == 'aws'"
+    ]
+    assert guards, "the AWS image map is read only under `if args.provider_name == 'aws'`"
+
+
 def test_the_runner_names_the_commit_setup_checks_out():
     header = RUNNER.read_text(encoding="utf-8").split("from __future__", 1)[0]
     assert "scripts/python/run_multienv.py" in header

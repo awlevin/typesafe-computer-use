@@ -5,11 +5,18 @@ so it reads the VM's screen with this backend (`--ocr rapidocr`). `recognize_tex
 `Desktop.recognize_text` returns: text, confidence, and a box in the image's own pixels, top to
 bottom and left to right. The engine loads its models once, on the first call, since that load is
 the slow part; importing this module loads nothing.
+
+Each box is shrunk to the ink inside it. RapidOCR's detector pads every line by about half its
+height, while macOS Vision's boxes hug the glyphs, and jev's geometry (which lines join into a
+block, which share a row) was tuned on Vision's. Padded, the entries of a settings sidebar, 40
+pixels apart, read as one paragraph, and a click on it landed between them.
 """
 
 from __future__ import annotations
 
 import functools
+import math
+import statistics
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -63,6 +70,33 @@ def _same_row(a: OcrLine, b: OcrLine) -> bool:
     return abs(ay1 - by1) < min(ay2 - ay1, by2 - by1) / 2
 
 
+INK_CONTRAST = 48  # grey levels between a pixel and the box's background for the pixel to be ink
+
+Box = tuple[float, float, float, float]
+
+
+def hug_ink(gray: Image.Image, box: Box) -> Box:
+    """The part of `box` that holds ink: pixels that differ from the box's background, which is the
+    median of its edge pixels, by more than `INK_CONTRAST`. That works for dark text on light and
+    light on dark alike. A box with no ink, or none on the image, stays as it is."""
+    x1, y1, x2, y2 = box
+    left, top = max(0, math.floor(x1)), max(0, math.floor(y1))
+    right, bottom = min(gray.width, math.ceil(x2)), min(gray.height, math.ceil(y2))
+    if right - left < 2 or bottom - top < 2:
+        return box
+    crop = gray.crop((left, top, right, bottom))
+    w, h = crop.size
+    # One byte per pixel in mode L; getdata() is deprecated in Pillow 12, and 11 lacks its successor.
+    edges = b"".join(crop.crop(edge).tobytes() for edge in ((0, 0, w, 1), (0, h - 1, w, h), (0, 0, 1, h), (w - 1, 0, w, h)))
+    background = statistics.median_low(edges)
+    ink = crop.point(lambda p: 255 if abs(p - background) > INK_CONTRAST else 0).getbbox()
+    if ink is None:
+        return box
+    return (float(left + ink[0]), float(top + ink[1]), float(left + ink[2]), float(top + ink[3]))
+
+
 def recognize_text(image: Image.Image) -> list[OcrLine]:
-    """RapidOCR lines as text, confidence, and a box in the image's own pixels."""
-    return lines_of(_engine()(image.convert("RGB")))
+    """RapidOCR lines as text, confidence, and a box around their ink in the image's own pixels."""
+    rgb = image.convert("RGB")
+    gray = rgb.convert("L")
+    return reading_order([(text, score, hug_ink(gray, box)) for text, score, box in lines_of(_engine()(rgb))])

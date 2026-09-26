@@ -311,6 +311,29 @@ def test_a_subtree_repeated_under_several_parents_is_walked_once():
     assert not cap_hit
 
 
+def test_a_wrapper_keyed_like_its_parent_is_walked_into_and_not_listed_twice():
+    """AT-SPI nests nameless panels of one frame, and a labelled control can wrap its own twin.
+    Neither is a copy from elsewhere: the walk goes through them, and keeps one of the twins."""
+    tree = {
+        "app": ["outer"],
+        "outer": ["inner"],
+        "inner": ["innermost"],
+        "innermost": ["button"],
+        "button": ["twin"],
+        "twin": [],
+    }
+    frames = {"app": None, "outer": (0, 0, 800, 600), "inner": (0, 0, 800, 600), "innermost": (0, 0, 800, 600)}
+    frames["button"] = frames["twin"] = (10, 10, 60, 24)
+    roles = {"app": "AXApplication", "outer": "AXGroup", "inner": "AXGroup", "innermost": "AXGroup"}
+
+    def attrs(n):
+        return AxAttrs(roles.get(n, "AXButton"), "OK" if n in ("button", "twin") else "", frames[n])
+
+    found, _, cap_hit = walk_actionable("app", lambda n: tree[n], attrs, lambda n: [], 1000, 800)
+    assert [(n.label, n.ref) for n in found] == [("OK", "button")]
+    assert not cap_hit
+
+
 def test_an_app_that_lists_itself_as_a_child_terminates():
     tree = {"app": ["app", "app", "bar"], "bar": ["file"], "file": []}
     frames = {"app": None, "bar": (0, 0, 800, 24), "file": (40, 0, 30, 24)}

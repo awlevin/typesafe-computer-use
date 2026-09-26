@@ -10,7 +10,7 @@
 #   scripts/osworld-gcp status                       running or stopped, and since when
 #   scripts/osworld-gcp stop                         stop the machine now; its disk stays
 #   scripts/osworld-gcp pull-results                 copy every result on the machine into results/
-#   scripts/osworld-gcp ssh                          a shell on the machine, for debugging
+#   scripts/osworld-gcp ssh [-- COMMAND]             a shell on the machine, or one command, for debugging
 #   scripts/osworld-gcp down                         destroy the machine and all infra/gcp made
 #
 # --dry-run before any command prints each command it would run, prefixed "+ ", and runs none.
@@ -193,6 +193,14 @@ wait_for_machine() {
     state=$("${SSH[@]}" --command "$PROBE" </dev/null 2>"$err" || true)
     state=${state//$'\r'/}
     state=${state##*$'\n'} # a first connection may print key generation above the answer
+    # A booting machine refuses connections for a while, but a refused authorization never passes
+    # by waiting: IAP's 4033 means the account lacks IAP tunnel access to the machine (roles/iap.
+    # tunnelResourceAccessor), for example because a time-limited grant of it ended.
+    if [[ -z $state ]] && grep -q "4033" "$err"; then
+      grep -m 1 "4033" "$err" >&2 || true
+      rm -f "$err"
+      die "IAP refused this account (4033, not authorized): it needs IAP tunnel access to $INSTANCE in $PROJECT"
+    fi
     case $state in
       ready) break ;;
       failed)
@@ -234,6 +242,21 @@ pull_results() {
   run "${RSYNC[@]}" "$INSTANCE:$REMOTE_DIR/results/" results/
 }
 
+# The machine moves a task's earlier result into its results/archive/ before a new run, and a pull
+# only adds files, so the local copy of that task moves aside too; otherwise the new run's files
+# would land on top of the old run's, and the leftovers would read as part of the new run. The pull
+# after the run brings back every agent's current result for the task.
+archive_local() {
+  local task=$1 stamp dir rel
+  stamp=$(date +%Y%m%d-%H%M%S)
+  for dir in results/*/*/*/"$task"; do
+    [[ -d $dir ]] || continue
+    rel=${dir#results/}
+    run mkdir -p "results/archive/$stamp-local/${rel%/*}"
+    run mv "$dir" "results/archive/$stamp-local/$rel"
+  done
+}
+
 # run-jev and run-luna: start, sync, run on the machine with its output streamed here, pull.
 run_task() {
   local command=$1 arg args="" status=0
@@ -251,6 +274,7 @@ run_task() {
   start_if_stopped
   wait_for_machine ready
   sync_repo
+  archive_local "$1"
 
   # A terminal gets a remote terminal too, so Ctrl-C stops the run on the machine.
   local tty=()
@@ -323,11 +347,12 @@ case "${1:-}" in
     run "${SSH[@]}" -- -N -L "$WATCH_PORT:localhost:$port"
     ;;
   ssh)
+    shift
     load
     start_if_stopped
     wait_for_machine
-    say "the repo is $REMOTE_DIR, owned by $REMOTE_USER: sudo -iu $REMOTE_USER"
-    run "${SSH[@]}"
+    (($#)) || say "the repo is $REMOTE_DIR, owned by $REMOTE_USER: sudo -iu $REMOTE_USER"
+    run "${SSH[@]}" "$@"
     ;;
   pull-results)
     load
