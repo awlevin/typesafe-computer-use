@@ -48,7 +48,22 @@ class OpenAIWriter:
                     continue
                 raise
             text = reply.choices[0].message.content if reply.choices else None
-            return SimpleNamespace(content=[SimpleNamespace(type="text", text=text or "")])
+            usage = _usage(getattr(reply, "usage", None))
+            return SimpleNamespace(content=[SimpleNamespace(type="text", text=text or "")], usage=usage)
+
+
+def _usage(usage) -> SimpleNamespace | None:
+    """Chat Completions usage in the Messages API's shape: `prompt_tokens` counts the cached ones too."""
+    if usage is None:
+        return None
+    prompt = getattr(usage, "prompt_tokens", None) or 0
+    cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", None) or 0
+    return SimpleNamespace(
+        input_tokens=max(prompt - cached, 0),
+        cache_read_input_tokens=cached,
+        cache_creation_input_tokens=0,
+        output_tokens=getattr(usage, "completion_tokens", None) or 0,
+    )
 
 
 def _response_format(kind: str, schema: dict | None) -> dict:
