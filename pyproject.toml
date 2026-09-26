@@ -23,7 +23,7 @@ classifiers = [
 dependencies = [
     "anthropic==1.6.0",
     "openai==2.54.0",
-    "pillow==12.3.0",
+    "pillow>=11.0,<13",
     "typesafe-sdk==0.6.0",
     "websocket-client==1.9.0",
     "ocrmac==1.0.1; sys_platform == 'darwin'",
