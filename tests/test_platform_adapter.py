@@ -1,4 +1,4 @@
-"""Both adapters provide the whole Desktop surface, macOS stays the default, and a block can swap in another."""
+"""Every adapter provides the whole Desktop surface, macOS stays the default, and a block can swap in another."""
 
 import inspect
 import sys
@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 from typesafe_computer_use import macos, windows
-from typesafe_computer_use.platform_adapter import Desktop, current, desktop, host, using
+from typesafe_computer_use.osworld.desktop import OSWorldDesktop
+from typesafe_computer_use.platform_adapter import Desktop, NoDesktop, current, desktop, host, pick_host, using
 
 SURFACE = sorted(name for name, value in vars(Desktop).items() if callable(value) and not name.startswith("_"))
 
@@ -23,12 +24,12 @@ def shape(function) -> list[tuple[str, object, object]]:
 # Read at collection, before the conftest guard swaps the machine-touching functions for refusals.
 PROVIDED = {
     (adapter.__name__, name): shape(getattr(adapter, name)) if callable(getattr(adapter, name, None)) else None
-    for adapter in (macos, windows)
+    for adapter in (macos, windows, OSWorldDesktop)
     for name in SURFACE
 }
 
 
-@pytest.mark.parametrize("adapter", [macos, windows], ids=["macos", "windows"])
+@pytest.mark.parametrize("adapter", [macos, windows, OSWorldDesktop], ids=["macos", "windows", "osworld"])
 @pytest.mark.parametrize("name", SURFACE)
 def test_each_adapter_provides_the_desktop_surface(adapter, name):
     provided = PROVIDED[(adapter.__name__, name)]
@@ -43,6 +44,22 @@ def test_the_surface_covers_what_the_callers_use():
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows picks windows.py")
 def test_macos_is_the_adapter_off_windows():
     assert host is macos and current() is macos
+
+
+def test_off_macos_a_host_without_the_mac_packages_has_no_desktop(monkeypatch):
+    monkeypatch.setitem(sys.modules, "typesafe_computer_use.macos", None)  # as on Linux, where Quartz is absent
+    monkeypatch.setattr(sys, "platform", "linux")
+    picked = pick_host()
+    assert isinstance(picked, NoDesktop)
+    with pytest.raises(RuntimeError, match="no desktop to call click_at on: linux has no desktop adapter"):
+        picked.click_at((1.0, 2.0))
+
+
+def test_on_macos_a_missing_mac_package_is_an_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "typesafe_computer_use.macos", None)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    with pytest.raises(ImportError):
+        pick_host()
 
 
 def fake_desktop() -> SimpleNamespace:

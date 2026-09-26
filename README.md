@@ -500,6 +500,12 @@ typesafe_computer_use/
   report.py       logging, annotated screenshots, payload dump
   timing.py       phase stopwatches, the timing line, run summary
   cli.py          `clicker` and `clicker-inspect`
+  osworld/        jev as an OSWorld agent (see OSWorld below)
+    agent.py      `JevAgent`: OSWorld's reset() and predict(), jev's loop on a worker thread
+    desktop.py    the adapter over OSWorld's observation: screenshots in, pyautogui code out
+    a11y.py       the Ubuntu accessibility tree OSWorld returns, in AX terms
+    ocr.py        the OCR backends a run names
+    results.py    each task's score, steps, time, and tokens, for `scripts/osworld results`
   browser/        the browser backend (see above), opt-in and independent of macos.py
     cdp.py        the only module that touches the browser        (platform adapter)
     perceive.py   DOM collection: ordered elements, click points, occlusion
@@ -516,6 +522,9 @@ tests/            pure logic: dates, merging, reading order, echo filter, config
   test_scenarios.py
                   tasks of increasing difficulty on that computer, L1 upward; a failure
                   here says the architecture cannot do that task
+osworld_overlay/  what `scripts/osworld setup` copies into OSWorld: the agent module and
+                  the runner that builds it
+scripts/          `sandbox` and `osworld`
 ```
 
 A Linux port adds a third adapter over xdotool, AT-SPI, and PaddleOCR or RapidOCR, and one line
@@ -661,6 +670,55 @@ each experiment a clean desktop. Only the browser backend runs there so far: the
 (`clicker`) still needs its macOS adapter. Chromium runs with `--no-sandbox`, since the
 container is the boundary. Watch it at http://localhost:6080/vnc.html?autoconnect=1&resize=scale,
 reachable from this machine only.
+
+## OSWorld
+
+[OSWorld](https://github.com/xlang-ai/OSWorld-V2) is a benchmark of real desktop tasks, each run
+in an Ubuntu VM and scored by OSWorld's own checks. jev runs there as an OSWorld agent,
+`JevAgent` in `typesafe_computer_use/osworld/`, and OSWorld's own GPT agent runs the same task
+with GPT-6 Luna to compare against. OSWorld's runner does the reset, the steps, the scoring, and
+the recording. Both agents get the same task, 50 steps, and 2 seconds after each action.
+
+OSWorld's VM runs under QEMU and needs a Linux host with KVM, so it does not run on a Mac.
+[Run in Google Cloud](#run-in-google-cloud) sets one up.
+
+```
+scripts/osworld setup                                    # OSWorld at the pinned commit, jev beside it
+scripts/osworld run-jev chrome/<task id> --ocr rapidocr  # one OSWorld 1.0 task with jev
+scripts/osworld run-luna chrome/<task id>                # the same task with OSWorld's GPT agent
+scripts/osworld results                                  # each task's score, steps, time, and jev's tokens
+```
+
+`setup` is the only step between a fresh clone and a run. It fetches OSWorld-V2 at the commit
+pinned in `scripts/osworld` into `.osworld/OSWorld-V2`, installs OSWorld's locked dependencies
+with its `full` extra into its own `.venv`, installs jev into that `.venv`, and copies
+`osworld_overlay/` over the checkout: `mm_agents/jev_agent.py`, and
+`scripts/python/run_multienv_jev.py`, OSWorld's generic runner changed only to build `JevAgent`.
+With `OSWORLD_OCR=rapidocr` it installs jev's RapidOCR extra too. `setup --v2-tasks` also
+downloads OSWorld 2.0's tasks, a gated Hugging Face dataset, and needs `HF_TOKEN`; a 2.0 task is
+`tasks/<id>`.
+
+A run reads its keys from `.env`: `TYPESAFE_API_KEY` and the writer's settings for jev,
+`OPENAI_API_KEY` for Luna. `--ocr` is required, since a result depends on the OCR that read the
+screen: `rapidocr` is the benchmark backend, and `vision` is macOS's own and runs only there.
+`OSWORLD_PROVIDER` picks OSWorld's VM provider, `docker` by default. Both runs keep OSWorld's
+screen recording and its VNC server on, so the VM can be watched live. Every command prints what
+it runs.
+
+Results land where OSWorld's runner puts them,
+`results/pyautogui/<observation type>/<model>/<domain>/<task id>/`: `result.txt` with the score,
+`traj.jsonl` with every action, a screenshot per step, and `recording.mp4`. jev's usual run folder
+is inside, as `jev/`, so `clicker --image` replays any step; its `run.json` holds the tokens per
+model and the OCR backend, provider, and architecture the run used, and `results` shows them. jev
+reads `screenshot_a11y_tree` observations and Luna the GPT script's default, `screenshot`, so
+compare their times with that in mind. OSWorld's runner skips a task that already has a result,
+so a rerun first moves the earlier one to `results/archive/<time>/`.
+
+To take an OSWorld update, change `OSWORLD_COMMIT` in `scripts/osworld`, and `OSWORLD_RELEASE`
+with it, the benchmark release that commit names. Copy OSWorld's `scripts/python/run_multienv.py`
+at that commit over `osworld_overlay/scripts/python/run_multienv_jev.py` and redo the changes
+marked `jev:`, as its header says; a test fails until its header names the new commit. Then run
+`scripts/osworld setup`.
 
 ## License
 

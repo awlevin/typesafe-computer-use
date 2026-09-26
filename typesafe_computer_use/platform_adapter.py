@@ -4,7 +4,9 @@ Every other module reaches the platform through `desktop` and never imports maco
 itself. `host` is the adapter for the OS this process runs on, chosen once at import. Windows gets
 windows.py. Every other OS gets macos.py, the default: on macOS it is the real adapter, and on the
 Linux test runner tests/conftest.py stands in for the modules it imports, so the suite runs there
-unchanged. Only the Windows path imports a Windows-only package.
+unchanged. Only the Windows path imports a Windows-only package. Where macos.py cannot load off
+macOS, such as a Linux machine that drives an OSWorld VM, `host` is a `NoDesktop`: the package
+still imports, and any call on the host says there is none.
 
 `desktop` is not an adapter itself. It forwards every attribute read, write, and delete to the
 adapter in use: `host`, unless a `using(adapter)` block has put another one in its place, such as
@@ -17,6 +19,7 @@ and windows.py to it, parameter for parameter.
 
 from __future__ import annotations
 
+import importlib
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -67,12 +70,39 @@ class Desktop(Protocol):
     def ax_value(self, ref) -> str | None: ...
 
 
-if sys.platform == "win32":
-    from . import windows as _adapter
-else:
-    from . import macos as _adapter
+class NoDesktop:
+    """The host adapter of a process that has no desktop of its own: every call raises and says why.
 
-host: Desktop = _adapter
+    It lets the package import where no adapter can, so a remote computer can be driven from
+    there through `using(adapter)`.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self._reason = reason
+
+    def __getattr__(self, name: str):
+        if name.startswith("__"):
+            raise AttributeError(name)  # copy, pickle, and friends probe for these
+        raise RuntimeError(f"no desktop to call {name} on: {self._reason}; drive a computer through using(adapter)")
+
+    def __repr__(self) -> str:
+        return f"<no desktop: {self._reason}>"
+
+
+def pick_host() -> Desktop:
+    """The adapter for the OS this process runs on. Off macOS and Windows, macos.py when it loads (the
+    Linux test runner stands in for its packages), and a `NoDesktop` when it does not."""
+    if sys.platform == "win32":
+        return importlib.import_module(f"{__package__}.windows")
+    try:
+        return importlib.import_module(f"{__package__}.macos")
+    except ImportError as missing:
+        if sys.platform == "darwin":
+            raise
+        return NoDesktop(f"{sys.platform} has no desktop adapter ({missing})")
+
+
+host: Desktop = pick_host()
 
 
 class _InUse:
