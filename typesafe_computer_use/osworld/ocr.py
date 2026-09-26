@@ -1,7 +1,8 @@
 """The OCR backends an OSWorld run can read the screen with, chosen by name for every run.
 
 There is no default: a benchmark result depends on the OCR that read the screen, so the backend is
-always named, and written into the run's `run.json`. Each entry of `BACKENDS` loads its backend
+always named, and written into the run's `run.json`. `vision` is macOS's own OCR; `rapidocr` runs
+anywhere, and is the one for a benchmark on Linux. Each entry of `BACKENDS` loads its backend
 when asked, and raises `Unavailable` with the reason when it cannot run here, so a bad choice fails
 before any VM starts.
 """
@@ -30,7 +31,19 @@ def _vision() -> Recognize:
     return platform_adapter.host.recognize_text
 
 
-BACKENDS: dict[str, Callable[[], Recognize]] = {"vision": _vision}
+def _rapidocr() -> Recognize:
+    """RapidOCR on ONNX Runtime, which runs anywhere. It needs the `rapidocr` extra."""
+    try:
+        from .. import ocr_rapid
+    except ImportError as error:
+        raise Unavailable(
+            f"the rapidocr backend cannot load ({error}); install it with: uv sync --extra rapidocr"
+            " (or pip install 'typesafe-computer-use[rapidocr]')"
+        ) from error
+    return ocr_rapid.recognize_text
+
+
+BACKENDS: dict[str, Callable[[], Recognize]] = {"vision": _vision, "rapidocr": _rapidocr}
 
 
 def backends() -> dict[str, Callable[[], Recognize]]:
