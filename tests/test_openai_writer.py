@@ -41,6 +41,26 @@ def test_a_request_goes_to_chat_completions_with_the_schema_and_only_the_endpoin
     assert "thinking" not in body
 
 
+def test_usage_comes_back_in_the_messages_shape_with_cached_tokens_apart(openai_env, endpoint):
+    endpoint.state["usage"] = {
+        "prompt_tokens": 1200,
+        "completion_tokens": 30,
+        "total_tokens": 1230,
+        "prompt_tokens_details": {"cached_tokens": 1000},
+    }
+    calls = Calls()
+    compose_url(MeteredWriter(make_writer(), calls), "open example", [])
+    (usage,) = calls.usage.values()
+    assert (usage.requests, usage.input_tokens, usage.cached_input_tokens, usage.output_tokens) == (1, 200, 1000, 30)
+
+
+def test_an_endpoint_that_reports_no_usage_still_counts_the_request(openai_env, endpoint):
+    calls = Calls()
+    compose_url(MeteredWriter(make_writer(), calls), "open example", [])
+    (usage,) = calls.usage.values()
+    assert (usage.requests, usage.input_tokens, usage.cached_input_tokens, usage.output_tokens) == (1, 0, 0, 0)
+
+
 def test_a_refused_format_steps_down_once_and_stays_down(openai_env, endpoint):
     endpoint.state["reject"] = lambda body: (
         "response_format json_schema is not supported" if body.get("response_format", {}).get("type") == "json_schema" else None

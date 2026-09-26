@@ -198,6 +198,7 @@ def endpoint():
     It answers the Anthropic Messages API or OpenAI's Chat Completions API by path, records each
     request with its headers, and replies with `state["reply"]`. `state["reject"]` may return an
     error message for a request body, which then gets a 400, the way an endpoint refuses a parameter.
+    `state["usage"]`, when set, is the Chat Completions reply's `usage`; without it there is none.
     """
     seen: list[dict] = []
     state: dict = {"reply": '{"ok": true, "url": "https://example.com", "reason": ""}', "reject": lambda body: None}
@@ -220,6 +221,7 @@ def endpoint():
                         "choices": [
                             {"index": 0, "message": {"role": "assistant", "content": state["reply"]}, "finish_reason": "stop"}
                         ],
+                        **({"usage": state["usage"]} if "usage" in state else {}),
                     },
                 )
             else:

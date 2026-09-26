@@ -121,6 +121,7 @@ def run(cfg: RunConfig, ctx_factory) -> RunState:
             "goal_achieved": state.answer.achieved if state.answer else None,
             "seconds": round(time.time() - started, 1),
             "calls": state.calls.summary(),
+            "usage": state.calls.tokens(),
             "handoffs": [asdict(h) for h in state.handoffs],
             "questions": [asdict(e) for e in state.guidance.exchanges],
             "timing": summarize(state.timings),
