@@ -19,11 +19,13 @@ jobs:
   # The test suite is pure logic, so it runs anywhere; tests/conftest.py stands in for the
   # macOS-only modules (Quartz, ApplicationServices, ocrmac) that cannot be installed here.
   # The lock marks every platform-only package, so this installs exactly the locked versions
-  # of the rest, on the oldest Python the project supports.
+  # of the rest, on the oldest Python the project supports. It adds the rapidocr extra, the OCR
+  # an OSWorld run on Linux reads the screen with, so its import path is tested where it runs;
+  # the tests never load its models, so the job stays offline.
   test-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-      - run: uv sync --frozen --python 3.12
+      - run: uv sync --frozen --python 3.12 --extra rapidocr
       - run: uv run pytest -q

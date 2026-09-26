@@ -35,6 +35,11 @@ dependencies = [
     "winocr==0.0.15; sys_platform == 'win32'",
 ]
 
+[project.optional-dependencies]
+# Portable OCR for Linux, where macOS Vision does not exist: the OSWorld benchmark reads the VM's
+# screen with it (`--ocr rapidocr`). Optional, so a Mac that stays on Vision never installs it.
+rapidocr = ["rapidocr==3.9.2", "onnxruntime==1.30.0"]
+
 [project.urls]
 Homepage = "https://github.com/awlevin/typesafe-computer-use"
 Issues = "https://github.com/awlevin/typesafe-computer-use/issues"
