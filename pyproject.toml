@@ -64,9 +64,21 @@ line-length = 130
 target-version = "py312"
 extend-exclude = [".agents", ".claude", ".private"]  # local agent folders: worktrees with their own venvs, links that may dangle
 
+[tool.ruff.format]
+# A copy of OSWorld's runner, kept line for line with upstream so that taking an OSWorld update
+# is a re-copy: formatting it would bury the few jev changes in a diff of the whole file.
+exclude = ["osworld_overlay/scripts/python/run_multienv_jev.py"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Only what OSWorld's own code in that copy trips at the pinned commit; every other rule still
+# checks the jev changes. An OSWorld update may add a code here, and nothing else.
+"osworld_overlay/scripts/python/run_multienv_jev.py" = [
+    "E722", "F541", "F821", "I001", "SIM102", "SIM115", "UP006", "UP015", "UP032", "UP035",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

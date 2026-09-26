@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+# Run OSWorld tasks with jev, and with OSWorld's own GPT agent to compare against.
+#
+#   scripts/osworld setup                        clone OSWorld at the pinned commit into .osworld/, install it and jev
+#   scripts/osworld setup --v2-tasks             the same, plus OSWorld 2.0's gated task files (needs HF_TOKEN)
+#   scripts/osworld run-jev DOMAIN/ID --ocr OCR  run one task with jev, reading the screen with the OCR backend named
+#   scripts/osworld run-luna DOMAIN/ID           run the same task with OSWorld's GPT agent and gpt-6-luna
+#   scripts/osworld results [FOLDER]             each task's score, steps, and time, and jev's tokens (FOLDER: results/)
+#
+# A task is DOMAIN/ID: chrome/<id> names OSWorld 1.0's evaluation_examples/examples/chrome/<id>.json,
+# and tasks/<id> a 2.0 task that `setup --v2-tasks` downloaded. OSWorld runs each task in a VM, so a
+# run needs a Linux host with KVM. OSWORLD_PROVIDER is OSWorld's VM provider (default docker), and
+# OSWORLD_OCR=rapidocr makes setup install jev's rapidocr extra. Every command reads this repo's .env
+# first, so those and the API keys can live there. Results land in results/; an earlier run of the
+# same task moves to results/archive/ first.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# OSWorld-V2 at tag osworld-v2.1, 2026-09-16, and that tag's benchmark release, which names the
+# 2.0 tasks it scores. To take an OSWorld update, change these and run `scripts/osworld setup`
+# again. osworld_overlay/scripts/python/run_multienv_jev.py is a copy of that commit's
+# scripts/python/run_multienv.py: re-copy it too (see its header).
+OSWORLD_COMMIT=3d778a3c9a34a079316f70df023b166700445792
+OSWORLD_RELEASE=osworld-v2.1
+OSWORLD_URL=https://github.com/xlang-ai/OSWorld-V2
+
+REPO=$(pwd)
+CHECKOUT="$REPO/.osworld/OSWorld-V2"
+PYTHON="$CHECKOUT/.venv/bin/python"
+RESULTS="$REPO/results"
+
+# The same for both agents, so their runs compare.
+MAX_STEPS=50
+SLEEP_AFTER_EXECUTION=2.0
+JEV_MODEL=jev  # the name OSWorld files jev's results under
+JEV_OBSERVATION=screenshot_a11y_tree
+LUNA_MODEL=gpt-6-luna
+
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+
+die() {
+  echo "scripts/osworld: $*" >&2
+  exit 2
+}
+
+# Print a command, then run it.
+run() {
+  local line="+" arg
+  for arg in "$@"; do line+=" $(printf '%q' "$arg")"; done
+  echo "$line"
+  "$@"
+}
+
+# The same, inside the OSWorld checkout.
+run_in_checkout() {
+  local line="+ (in .osworld/OSWorld-V2)" arg
+  for arg in "$@"; do line+=" $(printf '%q' "$arg")"; done
+  echo "$line"
+  (cd "$CHECKOUT" && "$@")
+}
+
+need() { command -v "$1" >/dev/null || die "$2 needs $1 on PATH"; }
+
+# Export the keys in this repo's .env, if there is one, without printing them.
+load_env() {
+  if [[ -f "$REPO/.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env"
+    set +a
+  fi
+}
+
+# ----- setup ---------------------------------------------------------------------------------
+
+setup() {
+  local v2_tasks=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --v2-tasks) v2_tasks=true ;;
+      *) usage; exit 2 ;;
+    esac
+    shift
+  done
+  need git setup
+  need uv setup
+
+  # A shallow fetch of the one pinned commit, into a checkout that re-runs reuse. A local change
+  # to a file the new commit changes stops the checkout rather than being thrown away.
+  if [[ ! -d "$CHECKOUT/.git" ]]; then
+    run mkdir -p "$CHECKOUT"
+    run git -C "$CHECKOUT" init --quiet
+  fi
+  git -C "$CHECKOUT" remote get-url origin >/dev/null 2>&1 || run git -C "$CHECKOUT" remote add origin "$OSWORLD_URL"
+  if ! git -C "$CHECKOUT" cat-file -e "$OSWORLD_COMMIT^{commit}" 2>/dev/null; then
+    run git -C "$CHECKOUT" fetch --depth 1 origin "$OSWORLD_COMMIT"
+  fi
+  run git -C "$CHECKOUT" -c advice.detachedHead=false checkout --detach "$OSWORLD_COMMIT"
+
+  # OSWorld's own lock and virtualenv, with the extra its 1.0 tasks need; then jev beside it.
+  run_in_checkout uv sync --frozen --extra full --python 3.12
+  local jev="$REPO"
+  if [[ "${OSWORLD_OCR:-}" == rapidocr ]]; then
+    if has_extra rapidocr; then
+      jev="${REPO}[rapidocr]"
+    else
+      echo "warning: OSWORLD_OCR=rapidocr, but this checkout of jev has no rapidocr extra yet;" \
+        "installing jev without it, so run-jev --ocr rapidocr will not start" >&2
+    fi
+  fi
+  run_in_checkout uv pip install --python .venv -e "$jev"
+
+  # OSWorld's side of jev: the agent module and the runner that builds it.
+  run cp -R "$REPO/osworld_overlay/." "$CHECKOUT/"
+
+  run_in_checkout .venv/bin/python -c "import desktop_env, typesafe_computer_use.osworld.agent"
+  run_in_checkout .venv/bin/python -c \
+    'from importlib.metadata import version; [print(n, version(n)) for n in ("pillow", "openai", "anthropic")]'
+
+  if $v2_tasks; then
+    if [[ -z "${HF_TOKEN:-}" ]]; then
+      echo "skipping OSWorld 2.0's tasks: they come from a gated Hugging Face dataset and need" \
+        "HF_TOKEN, in the environment or in .env"
+    else
+      run_in_checkout .venv/bin/python scripts/tools/download_osworld_v2_tasks.py --benchmark-release "$OSWORLD_RELEASE"
+    fi
+  fi
+  echo "OSWorld $OSWORLD_COMMIT is set up in .osworld/OSWorld-V2"
+}
+
+# Whether this repo's pyproject.toml declares the optional extra $1.
+has_extra() {
+  "$PYTHON" - "$REPO/pyproject.toml" "$1" <<'PY'
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as f:
+    extras = tomllib.load(f).get("project", {}).get("optional-dependencies", {})
+sys.exit(0 if sys.argv[2] in extras else 1)
+PY
+}
+
+# ----- runs ----------------------------------------------------------------------------------
+
+require_setup() {
+  [[ -x "$PYTHON" && -f "$CHECKOUT/scripts/python/run_multienv_jev.py" ]] ||
+    die "OSWorld is not set up here; run scripts/osworld setup first"
+}
+
+# A task's DOMAIN/ID, checked, since both parts become paths and JSON.
+check_task() {
+  local pattern='^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$'
+  [[ "$1" =~ $pattern ]] || die "a task is DOMAIN/ID, such as chrome/<id>, not '$1'"
+}
+
+# v1 for a 1.0 task, v2 for a 2.0 task: OSWorld's runners look for each in a different place.
+eval_version() {
+  local domain=${1%%/*} id=${1#*/} examples="$CHECKOUT/evaluation_examples"
+  if [[ -f "$examples/examples/$domain/$id.json" ]]; then
+    echo v1
+  elif [[ -f "$examples/task_class/task_$id.py" || -f "$examples/task_class/$domain/task_$id.py" ]]; then
+    echo v2
+  else
+    die "no task $1: neither evaluation_examples/examples/$domain/$id.json (1.0) nor" \
+      "evaluation_examples/task_class/task_$id.py (2.0, from scripts/osworld setup --v2-tasks)"
+  fi
+}
+
+# The one-task test list OSWorld's runners read: {"<domain>": ["<id>"]}.
+task_meta() {
+  local domain=${1%%/*} id=${1#*/}
+  local meta="$REPO/.osworld/tasks/${domain}__$id.json"
+  echo "+ writing the one-task list $meta" >&2
+  mkdir -p "$(dirname "$meta")"
+  printf '{"%s": ["%s"]}\n' "$domain" "$id" >"$meta"
+  echo "$meta"
+}
+
+# OSWorld's runners skip a task that already has a result, and empty the folder of one that has
+# none, which fails on jev's run folder inside it. So before a run, the task's earlier result, and
+# any unfinished one of the same agent, move to results/archive/<time>/.
+archive_earlier() {
+  local model=$1 task=$2 stamp dir rel dest
+  stamp=$(date +%Y%m%d-%H%M%S)
+  for dir in "$RESULTS"/*/*/"$model"/*/*; do
+    [[ -d "$dir" ]] || continue
+    rel=${dir#"$RESULTS"/}
+    case "$rel" in archive/*) continue ;; esac
+    if [[ "${rel#*/*/*/}" == "$task" || ! -f "$dir/result.txt" ]]; then
+      dest="$RESULTS/archive/$stamp/$rel"
+      run mkdir -p "$(dirname "$dest")"
+      run mv "$dir" "$dest"
+    fi
+  done
+}
+
+# OSWorld's Docker provider runs the VM under QEMU, which without KVM is too slow to benchmark.
+check_provider() {
+  if [[ "$PROVIDER" == docker && ! -e /dev/kvm ]]; then
+    die "OSWorld's docker provider needs KVM, and this machine has no /dev/kvm. Run it on a Linux" \
+      "host with KVM (see the README), or set OSWORLD_PROVIDER to another provider."
+  fi
+}
+
+run_jev() {
+  local task="" ocr=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ocr) [[ $# -gt 1 ]] || die "--ocr needs a backend"; ocr=$2; shift ;;
+      --ocr=*) ocr=${1#--ocr=} ;;
+      -*) die "run-jev takes DOMAIN/ID --ocr OCR, not $1" ;;
+      *) [[ -z "$task" ]] || die "run-jev runs one task"; task=$1 ;;
+    esac
+    shift
+  done
+  [[ -n "$task" ]] || die "run-jev needs a task: scripts/osworld run-jev DOMAIN/ID --ocr OCR"
+  if [[ -z "$ocr" ]]; then
+    local known="unknown until scripts/osworld setup has run"
+    if [[ -x "$PYTHON" ]]; then
+      known=$("$PYTHON" -c "from typesafe_computer_use.osworld import ocr; print(' '.join(ocr.backends()))") ||
+        known="none could be listed; run scripts/osworld setup again"
+    fi
+    die "run-jev needs --ocr OCR: a result depends on the OCR that read the screen, so every run" \
+      "names it. Backends: $known"
+  fi
+  check_task "$task"
+  require_setup
+  check_provider
+  [[ -n "${TYPESAFE_API_KEY:-}" ]] || die "TYPESAFE_API_KEY is not set (export it or put it in .env)"
+  # Build the agent once here, as the runner will: a bad OCR backend or writer setting fails now,
+  # not after the VM has started.
+  echo "+ checking that JevAgent(ocr=$ocr, provider=$PROVIDER) builds"
+  "$PYTHON" -c '
+import sys
+from typesafe_computer_use.osworld.agent import JevAgent
+try:
+    JevAgent(ocr=sys.argv[1], provider=sys.argv[2])
+except (ValueError, RuntimeError) as error:
+    sys.exit(f"scripts/osworld: {error}")' "$ocr" "$PROVIDER"
+
+  local version meta
+  version=$(eval_version "$task")
+  meta=$(task_meta "$task")
+  archive_earlier "$JEV_MODEL" "$task"
+  run_in_checkout .venv/bin/python scripts/python/run_multienv_jev.py \
+    --ocr "$ocr" \
+    --model "$JEV_MODEL" \
+    --provider_name "$PROVIDER" \
+    --observation_type "$JEV_OBSERVATION" \
+    --max_steps "$MAX_STEPS" \
+    --sleep_after_execution "$SLEEP_AFTER_EXECUTION" \
+    --num_envs 1 \
+    --test_all_meta_path "$meta" \
+    --eval_version "$version" \
+    --result_dir "$RESULTS" \
+    --enable_recording \
+    --enable_vnc
+  results "$RESULTS"
+}
+
+run_luna() {
+  [[ $# -eq 1 ]] || die "run-luna runs one task: scripts/osworld run-luna DOMAIN/ID"
+  local task=$1
+  check_task "$task"
+  require_setup
+  check_provider
+  [[ -n "${OPENAI_API_KEY:-}" ]] || die "OPENAI_API_KEY is not set (export it or put it in .env)"
+
+  local version meta
+  version=$(eval_version "$task")
+  meta=$(task_meta "$task")
+  archive_earlier "$LUNA_MODEL" "$task"
+  # The observation type is left to the script's default.
+  run_in_checkout .venv/bin/python scripts/python/run_multienv_gpt_response_api.py \
+    --model "$LUNA_MODEL" \
+    --provider_name "$PROVIDER" \
+    --max_steps "$MAX_STEPS" \
+    --sleep_after_execution "$SLEEP_AFTER_EXECUTION" \
+    --num_envs 1 \
+    --test_all_meta_path "$meta" \
+    --eval_version "$version" \
+    --result_dir "$RESULTS" \
+    --enable_recording \
+    --enable_vnc
+  results "$RESULTS"
+}
+
+# ----- results -------------------------------------------------------------------------------
+
+results() {
+  [[ $# -le 1 ]] || die "results reads one folder"
+  need uv results
+  run uv run --frozen --quiet python -m typesafe_computer_use.osworld.results "${1:-$RESULTS}"
+}
+
+load_env
+PROVIDER=${OSWORLD_PROVIDER:-docker}
+
+case "${1:-}" in
+  setup) shift; setup "$@" ;;
+  run-jev) shift; run_jev "$@" ;;
+  run-luna) shift; run_luna "$@" ;;
+  results) shift; results "$@" ;;
+  *) usage; exit 2 ;;
+esac
