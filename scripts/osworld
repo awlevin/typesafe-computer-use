@@ -102,7 +102,7 @@ setup() {
   local jev="$REPO"
   if [[ "${OSWORLD_OCR:-}" == rapidocr ]]; then
     if has_extra rapidocr; then
-      jev="$REPO[rapidocr]"
+      jev="${REPO}[rapidocr]"
     else
       echo "warning: OSWORLD_OCR=rapidocr, but this checkout of jev has no rapidocr extra yet;" \
         "installing jev without it, so run-jev --ocr rapidocr will not start" >&2
