@@ -44,7 +44,7 @@ WHEEL_DELTA = 120  # one notch of the wheel
 LINES_PER_NOTCH = 3  # the Windows default; the actions ask for lines, as on macOS
 
 # Windows.Media.Ocr reads one language per engine and reports no confidence, so every line it returns
-# counts as certain and passes MIN_OCR_CONFIDENCE. The language pack must be installed (see README).
+# counts as certain and passes MIN_OCR_CONFIDENCE. The language pack must be installed (see docs/windows.md).
 OCR_LANGUAGE = "en"
 OCR_CONFIDENCE = 1.0
 
