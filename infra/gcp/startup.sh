@@ -157,10 +157,14 @@ missing=()
 for tool in git rsync curl python3; do
   command -v "$tool" >/dev/null || missing+=("$tool")
 done
+for lib in libGL.so.1 libglib-2.0.so.0; do
+  ldconfig -p | grep -q "$lib" || missing+=("$lib")
+done
 if ((${#missing[@]})); then
-  log "installing ${missing[*]}"
+  log "installing packages for ${missing[*]}"
   apt_get update
-  apt_get install git rsync curl ca-certificates python3
+  # libgl1 and libglib2.0-0: rapidocr's opencv-python (not headless) loads libGL and GLib at import.
+  apt_get install git rsync curl ca-certificates python3 libgl1 libglib2.0-0
 fi
 
 if ! dpkg-query -W -f='${Status}' docker-ce 2>/dev/null | grep -q 'install ok installed'; then
