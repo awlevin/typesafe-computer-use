@@ -18,13 +18,20 @@ and no element takes its name from it, so a password, a one-time code or a card
 number cannot reach the classifier, the writer, the log or the run folder. The
 only value used is a button input's, which is the button's own label. Fields
 that ask for a credential are marked `secret`, and nothing is typed into them.
+
+The same script also collects the page's visible text - the prices, dates and
+error messages that are not controls - as bounded `page_text` blocks, separate
+from the element list so they can never become click targets. The same privacy
+rule holds there: text inside a text control or an editable region (an unsent
+draft in a `contenteditable`) is not collected, so what the user typed still
+cannot reach the classifier, the writer, the log or the run folder.
 """
 
 from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 INTERACTIVE_JS = r"""
@@ -93,8 +100,64 @@ INTERACTIVE_JS = r"""
     if (el) el.setAttribute("data-tscu", String(i));
     o.index = i;
   });
+  // --- visible text: the half of the page that is not a control ----------------
+  // Collected in the same round trip, as bounded blocks in reading order, sent
+  // separately from `items` so a text block can never be chosen as a click target.
+  // The typing rule still holds: nothing inside a text control (input, textarea,
+  // select) or an editable region is read - an unsent draft in a contenteditable
+  // is text on the page, and it still does not leave the page.
+  const CONTROL = "a,button,input,select,textarea,summary,option,[onclick],[tabindex]";
+  const SKIP = "script,style,noscript,template,select,textarea,svg," +
+               "[role='textbox'],[role='searchbox'],[role='combobox']";
+  const INLINE = new Set(["B","STRONG","I","EM","U","S","SMALL","ABBR","CODE","MARK","SUB","SUP","SPAN"]);
+  const TEXT_MAX = 120, TEXT_CHARS = 240;
+  const names = new Set(out.map(o => o.name.toLowerCase()));
+  const groups = new Map();  // block element -> raw text parts, in DOM order
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    const p = node.parentElement;
+    if (!p || !(node.nodeValue || "").trim()) continue;
+    if (p.closest(SKIP)) continue;
+    let editable = false;
+    for (let a = p; a; a = a.parentElement) if (a.isContentEditable) { editable = true; break; }
+    if (editable) continue;
+    if (p.closest("[aria-hidden='true']")) continue;
+    let g = p;
+    while (g.parentElement && INLINE.has(g.tagName)) g = g.parentElement;
+    let parts = groups.get(g);
+    if (!parts) groups.set(g, (parts = []));
+    parts.push(node.nodeValue);
+  }
+  const textOut = [];
+  const textSeen = new Set();
+  for (const [el, parts] of groups) {
+    if (el.matches(CONTROL) || ROLES.has((el.getAttribute("role") || "").toLowerCase())) continue;
+    const text = parts.join(" ").replace(/\s+/g, " ").trim();
+    if (text.length < 2) continue;
+    const key = text.toLowerCase();
+    // A copy of a control's label, or a repeat of a block already kept (nav bars,
+    // ARIA duplicates), adds nothing.
+    if (names.has(key) || textSeen.has(key)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) continue;
+    // Same order as the element pass: the cheap viewport test first, the
+    // expensive getComputedStyle only for blocks that survive it.
+    const onScreen = r.top < vh + 8 && r.bottom > -8 && r.left < vw + 8 && r.right > -8;
+    if (!onScreen) continue;
+    const st = getComputedStyle(el);
+    if (st.visibility === "hidden" || st.display === "none" || parseFloat(st.opacity || "1") === 0) continue;
+    textSeen.add(key);
+    textOut.push({text: text.slice(0, TEXT_CHARS),
+                  x: Math.round(r.left), y: Math.round(r.top),
+                  w: Math.round(r.width), h: Math.round(r.height)});
+    if (textOut.length >= TEXT_MAX) break;
+  }
+  textOut.sort((a, b) => (Math.abs(a.y - b.y) > 8 ? a.y - b.y : a.x - b.x));
+  textOut.forEach((o, i) => { o.e = "t" + i; });
   const sc = document.scrollingElement || document.documentElement;
   return {url: location.href, title: document.title, vw, vh, count: out.length, items: out,
+          text: textOut,
           scroll_y: Math.round(sc.scrollTop), scroll_max: Math.round(sc.scrollHeight - vh),
           candidates: total, below_fold: belowFold,
           can_scroll: sc.scrollHeight > vh + 4,
@@ -137,6 +200,21 @@ class Element:
         return " ".join(bits)
 
 
+@dataclass(frozen=True)
+class TextBlock:
+    """One visible text block: evidence for the classifier, never a click target."""
+
+    evidence_id: str
+    text: str
+    x: int
+    y: int
+    w: int
+    h: int
+
+    def label(self) -> str:
+        return f"{self.evidence_id}: {self.text!r}"
+
+
 @dataclass
 class Page:
     url: str
@@ -153,14 +231,16 @@ class Page:
     scroll_max: int = 0
     candidates: int = 0
     below_fold: int = 0
+    text: list[TextBlock] = field(default_factory=list)  # visible page text, evidence only
 
     @property
     def has_field(self) -> bool:
         return self.field_count > 0
 
 
-def perceive(session: Any, *, budget: int = 120) -> Page:
-    """One CDP round trip -> an ordered, labelled element list. No pixels."""
+def perceive(session: Any, *, budget: int = 120, text_budget: int = 120) -> Page:
+    """One CDP round trip -> an ordered, labelled element list, plus the page's visible
+    text as evidence blocks. No pixels."""
     start = time.perf_counter()
     data = session.evaluate(INTERACTIVE_JS) or {}
     elapsed = (time.perf_counter() - start) * 1000
@@ -182,6 +262,18 @@ def perceive(session: Any, *, budget: int = 120) -> Page:
         )
         for i, it in enumerate((data.get("items") or [])[:budget])
     ]
+    text = [
+        TextBlock(
+            evidence_id=str(tb.get("e", f"t{i}")),
+            text=str(tb.get("text", "")),
+            x=int(tb.get("x", 0)),
+            y=int(tb.get("y", 0)),
+            w=int(tb.get("w", 0)),
+            h=int(tb.get("h", 0)),
+        )
+        for i, tb in enumerate((data.get("text") or [])[:text_budget])
+        if str(tb.get("text", "")).strip()
+    ]
     return Page(
         url=str(data.get("url", "")),
         title=str(data.get("title", "")),
@@ -197,6 +289,7 @@ def perceive(session: Any, *, budget: int = 120) -> Page:
         scroll_max=int(data.get("scroll_max", 0)),
         candidates=int(data.get("candidates", 0)),
         below_fold=int(data.get("below_fold", 0)),
+        text=text,
     )
 
 
@@ -207,6 +300,7 @@ def to_json(page: Page) -> str:
             "title": page.title,
             "elapsed_ms": round(page.elapsed_ms, 2),
             "items": [it.__dict__ for it in page.items],
+            "text": [tb.__dict__ for tb in page.text],
         },
         indent=2,
     )

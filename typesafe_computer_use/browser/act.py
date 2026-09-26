@@ -156,8 +156,15 @@ def wait_for_load(session: Session, *, timeout_ms: int = 15000, settle_ms: int =
 
 
 def fingerprint(page: Page) -> tuple:
-    """Cheap identity for 'is this still the same page?'."""
-    return (page.url, page.title, page.scroll_y, tuple((e.index, e.name, e.x, e.y) for e in page.items))
+    """Cheap identity for 'is this still the same page?'. The text is part of it: a form
+    error or a loaded price can be the only thing that changed."""
+    return (
+        page.url,
+        page.title,
+        page.scroll_y,
+        tuple((e.index, e.name, e.x, e.y) for e in page.items),
+        tuple(tb.text for tb in page.text),
+    )
 
 
 def observe_until_changed(

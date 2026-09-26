@@ -35,6 +35,7 @@ the TypeSafe decision. Perception is now ~0% of a step.
 
 ```
 Runtime.evaluate ─► ordered element list (text, role, click point, on-screen, covered)
+                   + visible page text (prices, dates, errors; evidence only)
                      │
         ONE TypeSafe request, two Choices
         kind    : click | type_text | navigate | press_enter | scroll_down | ... | done
@@ -50,6 +51,14 @@ model doubt when the model was never at fault.
 
 The post-action observation and the next step's perception are the same call, so waiting
 costs no extra round trip.
+
+Perception also returns visible page text as bounded `page_text` blocks in reading order.
+These blocks enter the state as evidence separate from clickable `elements`, so they inform
+`done` and `satisfied` but cannot be selected as click targets. The collection caps at
+120 blocks of 240 characters, drops duplicate text and control labels, and excludes
+input, textarea, select and editable-region contents. An unsent draft in an editable
+field is not sent as page text. A text-only change, such as a newly shown error, counts
+as a page change before the next decision.
 
 ## Where browser free text comes from
 
