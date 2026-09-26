@@ -822,7 +822,7 @@ requires-dist = [
     { name = "anthropic", specifier = "==1.6.0" },
     { name = "ocrmac", marker = "sys_platform == 'darwin'", specifier = "==1.0.1" },
     { name = "openai", specifier = "==2.54.0" },
-    { name = "pillow", specifier = "==12.3.0" },
+    { name = "pillow", specifier = ">=11.0,<13" },
     { name = "psutil", marker = "sys_platform == 'win32'", specifier = "==7.2.2" },
     { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin'", specifier = "==12.2.2" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'", specifier = "==12.2.2" },
