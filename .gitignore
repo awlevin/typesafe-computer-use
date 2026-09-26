@@ -6,5 +6,6 @@ __pycache__/
 .ruff_cache/
 .env
 dist/
-runs/
 bench/results-*.json
+.osworld/
+results/

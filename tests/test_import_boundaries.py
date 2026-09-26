@@ -2,7 +2,8 @@
 
 Read from the source rather than by importing: every module the browser package reaches must
 stay clear of the platform adapter, or `clicker-bench` needs macOS-only packages to start. The
-same holds for the reader of OSWorld's accessibility tree, which runs beside OSWorld on Linux.
+same holds for the readers of OSWorld's accessibility tree and of its results, which run beside
+OSWorld on Linux.
 """
 
 import ast
@@ -46,7 +47,7 @@ def module_file(name: str) -> Path | None:
     return None
 
 
-@pytest.mark.parametrize("start", ["browser", "osworld.a11y"])
+@pytest.mark.parametrize("start", ["browser", "osworld.a11y", "osworld.results"])
 def test_never_reaches_the_desktop_adapter(start):
     seen, todo = set(), [start]
     while todo:
