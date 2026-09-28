@@ -15,8 +15,8 @@ MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", 
 _MONTH = r"jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec"
 _DASHES = "[-\u2013\u2014]"  # hyphen, en dash, em dash between the days of a range
 DATE_RE = re.compile(
-    rf"\b(?:(?P<mon>{_MONTH})[a-z]*\.?\s+(?P<day>\d{{1,2}})(?:\s*{_DASHES}\s*\d{{1,2}})?(?:,?\s+(?P<year>\d{{4}}))?"
-    rf"|(?P<day2>\d{{1,2}})\s+(?P<mon2>{_MONTH})[a-z]*\.?(?:,?\s+(?P<year2>\d{{4}}))?"
+    rf"\b(?:(?P<mon>{_MONTH})[a-z]*\.?\s+(?P<day>\d{{1,2}})(?:\s*{_DASHES}\s*\d{{1,2}})?(?:(?:,\s*|\s+)(?P<year>\d{{4}}))?"
+    rf"|(?P<day2>\d{{1,2}})\s+(?P<mon2>{_MONTH})[a-z]*\.?(?:(?:,\s*|\s+)(?P<year2>\d{{4}}))?"
     r"|(?P<iso>\d{4}-\d{2}-\d{2})"
     r"|(?P<m>\d{1,2})/(?P<d>\d{1,2})/(?P<y>\d{4}))\b",
     re.IGNORECASE,
@@ -39,6 +39,12 @@ def first_date(text: str, today: date | None = None) -> date | None:
     m = DATE_RE.search(text)
     if not m:
         return None
+    if m.group("mon2") and not m.group("year2"):
+        # OCR can put a stray digit before a complete month-first date. The
+        # second match starts inside "1 Apr" and extends to "Apr 30, 2026".
+        month_first = DATE_RE.search(text, m.start("mon2"))
+        if month_first and month_first.group("mon") and month_first.start() < m.end():
+            m = month_first
     try:
         if m.group("iso"):
             return date.fromisoformat(m.group("iso"))

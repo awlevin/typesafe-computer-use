@@ -14,6 +14,25 @@ def test_parses_common_forms():
     assert first_date("4 Nov 2026", TODAY) == date(2026, 11, 4)
 
 
+def test_ocr_dates_keep_year_and_prefer_overlapping_month_first():
+    assert first_date("Jun 18,2026", TODAY) == date(2026, 6, 18)
+    assert first_date("1 Apr 30, 2026", TODAY) == date(2026, 4, 30)
+    assert first_date("October 13 - 15, 2026", TODAY) == date(2026, 10, 13)
+    assert first_date("30 Sep 2026", TODAY) == date(2026, 9, 30)
+
+
+def test_first_genuine_date_still_wins_in_multi_date_text():
+    assert first_date("30 Sep 2026, then Oct 13, 2026", TODAY) == date(2026, 9, 30)
+    assert first_date("Jun 18,2026, then Oct 13, 2026", TODAY) == date(2026, 6, 18)
+
+
+def test_ocr_dates_reach_classifier_hints(screen, make_item):
+    items = [make_item(0, "TechCrunch event Jun 18,2026"), make_item(1, "1 Apr 30, 2026", y1=200, y2=230)]
+    hints = date_hints(items, screen, TODAY)
+    assert hints[0] == "dated 2026-06-18 (90 days ago)"
+    assert hints[1] == "dated 2026-04-30 (139 days ago)"
+
+
 def test_no_date_and_invalid_date():
     assert first_date("Register Now", TODAY) is None
     assert first_date("Feb 30", TODAY) is None
