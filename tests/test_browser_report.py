@@ -147,13 +147,13 @@ def test_load_step_round_trips_a_step(tmp_path: Path):
 
 
 def test_load_step_round_trips_page_text(tmp_path: Path):
-    """The evidence blocks come back with the elements, so a replayed step rebuilds the
-    exact state the classifier saw, page_text included."""
+    """The text blocks come back with the elements, so a replayed step rebuilds the exact
+    state the classifier saw, page_text included."""
     folder = RunFolder.create(tmp_path)
     page = make_page(
         text=[
-            TextBlock("t0", "Invoice #1042 total $42.10", 10, 300, 300, 20),
-            TextBlock("t1", "Payment failed: card declined", 10, 330, 300, 20),
+            TextBlock("Invoice #1042 total $42.10", 10, 300, 300, 20),
+            TextBlock("Payment failed: card declined", 10, 330, 300, 20),
         ]
     )
     folder.step_elements(1, page, can_write=False)
@@ -161,11 +161,10 @@ def test_load_step_round_trips_page_text(tmp_path: Path):
 
     rebuilt = load_step(folder.root, 1)["page"]
     assert rebuilt.text == page.text
-    assert [tb.evidence_id for tb in rebuilt.text] == ["t0", "t1"]
 
 
 def test_render_payload_shows_page_text_as_evidence():
-    page = make_page(text=[TextBlock("t0", "Next concert SEP 19", 10, 300, 300, 20)])
+    page = make_page(text=[TextBlock("Next concert SEP 19", 10, 300, 300, 20)])
     text = render_payload(goal="g", page=page, history=[], state={"goal": "g"}, actions={}, elements={})
     assert "PAGE TEXT" in text
     assert "never click targets" in text

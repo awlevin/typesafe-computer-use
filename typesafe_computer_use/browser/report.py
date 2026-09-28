@@ -79,7 +79,7 @@ class RunFolder:
                     "below_fold": page.below_fold,
                     "items": [asdict(e) for e in page.items],
                     # The visible text the classifier also saw: replay rebuilds the same
-                    # state only if the evidence blocks come back with the elements.
+                    # state only if it comes back with the elements.
                     "text": [asdict(tb) for tb in page.text],
                 },
                 indent=2,
@@ -139,7 +139,7 @@ def render_payload(
             RULE,
         ]
         for tb in page.text:
-            parts.append(f"[{tb.evidence_id:>4s}] {tb.x:5d},{tb.y:5d} {tb.w:4d}x{tb.h:<4d} {tb.text!r}")
+            parts.append(f"      {tb.x:5d},{tb.y:5d} {tb.w:4d}x{tb.h:<4d} {tb.text!r}")
     return "\n".join(parts) + "\n"
 
 
@@ -170,14 +170,13 @@ def page_from_elements(data: dict) -> Page:
     ]
     text = [
         TextBlock(
-            evidence_id=str(tb.get("evidence_id", f"t{i}")),
             text=str(tb.get("text", "")),
             x=int(tb.get("x", 0)),
             y=int(tb.get("y", 0)),
             w=int(tb.get("w", 0)),
             h=int(tb.get("h", 0)),
         )
-        for i, tb in enumerate(data.get("text", []))
+        for tb in data.get("text", [])
     ]
     return Page(
         url=str(data.get("url", "")),

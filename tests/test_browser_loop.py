@@ -10,6 +10,7 @@ and the disk.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -69,8 +70,8 @@ def login_page(**extra):
     }
 
 
-def text_block(eid, text, **kwargs):
-    base = {"e": eid, "text": text, "x": 10, "y": 300, "w": 420, "h": 20}
+def text_block(text, **kwargs):
+    base = {"text": text, "x": 10, "y": 300, "w": 420, "h": 20}
     base.update(kwargs)
     return base
 
@@ -92,9 +93,9 @@ def listing_page(**extra):
             item(1, "Buy tickets", tag="button", role="button"),
         ],
         "text": [
-            text_block("t0", "Upcoming shows"),
-            text_block("t1", "The Echo Parade - SEP 19 at the Fillmore, doors 8 PM"),
-            text_block("t2", "Sold out: JUN 4 at the Fox"),
+            text_block("Upcoming shows"),
+            text_block("The Echo Parade - SEP 19 at the Fillmore, doors 8 PM"),
+            text_block("Sold out: JUN 4 at the Fox"),
         ],
         "scroll_y": 0,
         "scroll_max": 0,
@@ -330,21 +331,19 @@ def test_an_answer_that_lives_only_in_plain_text_reaches_done(tmp_path):
     result, folder = run(browser, client, tmp_path, steps=1)
 
     state = client.requests[0]["state"]
-    assert any(ANSWER in block["text"] for block in state["page_text"])
+    assert any(ANSWER in text for text in state["page_text"])
     assert ANSWER not in json.dumps(state["elements"])
     assert result.outcome == "done"
     # The step payload and the saved state in the run folder show the new text.
     assert ANSWER in load_step(folder.root, 1)["payload"]
     saved = json.loads((folder.root / "step-01-state.json").read_text())
-    assert any(ANSWER in block["text"] for block in saved["page_text"])
+    assert any(ANSWER in text for text in saved["page_text"])
 
 
 def test_page_text_is_evidence_separate_from_click_targets():
-    """Text blocks get evidence ids, not element indexes: nothing in the element question
+    """Text blocks go in their own list, in reading order: nothing in the element question
     or the elements list can point the loop at one."""
     page = perceive(FakeBrowser(listing_page()))
-    assert [tb.evidence_id for tb in page.text] == ["t0", "t1", "t2"]
-
     criteria = element_criteria(page)
     assert set(criteria) == {"0", "1"}
     assert ANSWER not in json.dumps(criteria)
@@ -352,7 +351,11 @@ def test_page_text_is_evidence_separate_from_click_targets():
     state = base_state("g", page, [], url_catalog=None)
     assert [el["i"] for el in state["elements"]] == [0, 1]
     assert ANSWER not in json.dumps(state["elements"])
-    assert {block["e"] for block in state["page_text"]} == {"t0", "t1", "t2"}
+    assert state["page_text"] == [
+        "Upcoming shows",
+        "The Echo Parade - SEP 19 at the Fillmore, doors 8 PM",
+        "Sold out: JUN 4 at the Fox",
+    ]
 
 
 def test_a_page_with_no_text_sends_no_page_text():
@@ -364,14 +367,14 @@ def test_a_page_with_no_text_sends_no_page_text():
 
 
 def test_page_text_is_capped():
-    page = listing_page(text=[text_block(f"t{i}", f"block number {i} of the page") for i in range(300)])
+    page = listing_page(text=[text_block(f"block number {i} of the page") for i in range(300)])
     assert len(perceive(FakeBrowser(page)).text) == 120
 
 
 def test_a_password_value_stays_out_of_the_state_when_text_is_collected():
     """Done-when two, with text collection on: the field's value reaches nothing, while
     ordinary page text around the form does."""
-    page = perceive(FakeBrowser(login_page(text=[text_block("t0", "Sign in to continue"), text_block("t1", "Welcome back")])))
+    page = perceive(FakeBrowser(login_page(text=[text_block("Sign in to continue"), text_block("Welcome back")])))
     blob = json.dumps(base_state("g", page, [], url_catalog=None))
     assert SECRET not in blob
     assert "Welcome back" in blob
@@ -379,12 +382,13 @@ def test_a_password_value_stays_out_of_the_state_when_text_is_collected():
 
 
 def test_the_page_script_never_collects_what_was_typed_or_drafted():
-    """The text pass excludes text controls and editable regions, so a field's contents or
-    an unsent contenteditable draft cannot leave the page as 'evidence'."""
+    """The text pass skips text controls, textbox roles and editable regions, so a field's
+    contents or an unsent contenteditable draft cannot leave the page as page text. These
+    tests run no browser, so this reads the script itself."""
     js = INTERACTIVE_JS
-    assert "createTreeWalker" in js
-    assert "isContentEditable" in js
-    assert "TEXTAREA" in js and "SELECT" in js
-    assert "textbox" in js and "searchbox" in js
-    # Still exactly one read of el.value in the whole script: the button's own label.
-    assert js.count("el.value") == 1
+    skip = js.split("const SKIP = ", 1)[1].split(";", 1)[0]
+    for part in ("textarea", "select", "[contenteditable]", "'textbox'", "'searchbox'", "'combobox'"):
+        assert part in skip
+    assert "p.isContentEditable || p.closest(SKIP)" in js
+    # Still exactly one `.value` read in the whole script: a button input's own label.
+    assert re.findall(r"\.value\b", js) == [".value"]

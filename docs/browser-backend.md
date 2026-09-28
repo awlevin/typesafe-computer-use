@@ -52,13 +52,12 @@ model doubt when the model was never at fault.
 The post-action observation and the next step's perception are the same call, so waiting
 costs no extra round trip.
 
-Perception also returns visible page text as bounded `page_text` blocks in reading order.
-These blocks enter the state as evidence separate from clickable `elements`, so they inform
-`done` and `satisfied` but cannot be selected as click targets. The collection caps at
-120 blocks of 240 characters, drops duplicate text and control labels, and excludes
-input, textarea, select and editable-region contents. An unsent draft in an editable
-field is not sent as page text. A text-only change, such as a newly shown error, counts
-as a page change before the next decision.
+Perception also returns the page's visible text, such as a price, a date or an error, as
+`page_text`: up to 120 blocks of 240 characters in reading order. It is kept apart from
+`elements`, so it informs `done` and `satisfied` but is never a click target. Hidden text,
+repeats and copies of a control's label are left out, and so is anything in a text control,
+a textbox or an editable region, so an unsent draft stays on the page. A change in the text
+alone counts as a page change.
 
 ## Where browser free text comes from
 

@@ -19,12 +19,11 @@ number cannot reach the classifier, the writer, the log or the run folder. The
 only value used is a button input's, which is the button's own label. Fields
 that ask for a credential are marked `secret`, and nothing is typed into them.
 
-The same script also collects the page's visible text - the prices, dates and
-error messages that are not controls - as bounded `page_text` blocks, separate
-from the element list so they can never become click targets. The same privacy
-rule holds there: text inside a text control or an editable region (an unsent
-draft in a `contenteditable`) is not collected, so what the user typed still
-cannot reach the classifier, the writer, the log or the run folder.
+The same script collects the page's visible text, the prices, dates and error
+messages that are not controls, as `page_text` blocks kept apart from the element
+list, so a block is never a click target. The rule above holds there too: text in
+a text control or an editable region, such as an unsent `contenteditable` draft,
+is not collected.
 """
 
 from __future__ import annotations
@@ -100,61 +99,63 @@ INTERACTIVE_JS = r"""
     if (el) el.setAttribute("data-tscu", String(i));
     o.index = i;
   });
-  // --- visible text: the half of the page that is not a control ----------------
-  // Collected in the same round trip, as bounded blocks in reading order, sent
-  // separately from `items` so a text block can never be chosen as a click target.
-  // The typing rule still holds: nothing inside a text control (input, textarea,
-  // select) or an editable region is read - an unsent draft in a contenteditable
-  // is text on the page, and it still does not leave the page.
-  const CONTROL = "a,button,input,select,textarea,summary,option,[onclick],[tabindex]";
-  const SKIP = "script,style,noscript,template,select,textarea,svg," +
+  // --- visible text: prices, dates, errors, everything that is not a control --------
+  // Blocks in reading order, kept apart from `items` so a text block is never a click
+  // target. Nothing inside a text control, a textbox role or an editable region is
+  // read, so a field's contents and an unsent contenteditable draft stay on the page.
+  const SKIP = "script,style,noscript,template,select,textarea,svg,[aria-hidden='true']," +
+               "[contenteditable]:not([contenteditable='false'])," +
                "[role='textbox'],[role='searchbox'],[role='combobox']";
+  const CONTROL = "a,button,input,select,textarea,summary,option,[onclick],[tabindex]";
   const INLINE = new Set(["B","STRONG","I","EM","U","S","SMALL","ABBR","CODE","MARK","SUB","SUP","SPAN"]);
   const TEXT_MAX = 120, TEXT_CHARS = 240;
-  const names = new Set(out.map(o => o.name.toLowerCase()));
-  const groups = new Map();  // block element -> raw text parts, in DOM order
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  let node;
-  while ((node = walker.nextNode())) {
-    const p = node.parentElement;
-    if (!p || !(node.nodeValue || "").trim()) continue;
-    if (p.closest(SKIP)) continue;
-    let editable = false;
-    for (let a = p; a; a = a.parentElement) if (a.isContentEditable) { editable = true; break; }
-    if (editable) continue;
-    if (p.closest("[aria-hidden='true']")) continue;
-    let g = p;
+  // Text nodes under their nearest block element, in DOM order. From the document
+  // itself when there is no body yet (mid-load) or at all (an SVG or XML file).
+  const groups = new Map();
+  const walker = document.createTreeWalker(document.body || document, NodeFilter.SHOW_TEXT);
+  for (let node; (node = walker.nextNode()); ) {
+    if (!node.nodeValue.trim()) continue;
+    let g = node.parentElement;
     while (g.parentElement && INLINE.has(g.tagName)) g = g.parentElement;
-    let parts = groups.get(g);
-    if (!parts) groups.set(g, (parts = []));
-    parts.push(node.nodeValue);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(node);
   }
-  const textOut = [];
-  const textSeen = new Set();
-  for (const [el, parts] of groups) {
+  // Per text node, and only inside a block already found on screen, where it is cheap.
+  // A shown block can still hold a skipped part, or an inline part with no box or
+  // with visibility hidden.
+  const range = document.createRange();
+  const readable = (n, el) => {
+    const p = n.parentElement;
+    if (p.isContentEditable || p.closest(SKIP)) return false;
+    if (p === el) return true;
+    range.selectNodeContents(n);
+    return range.getClientRects().length > 0 && getComputedStyle(p).visibility !== "hidden";
+  };
+  const names = new Set(out.map(o => o.name.toLowerCase()));
+  const textOut = [], textSeen = new Set();
+  for (const [el, nodes] of groups) {
     if (el.matches(CONTROL) || ROLES.has((el.getAttribute("role") || "").toLowerCase())) continue;
-    const text = parts.join(" ").replace(/\s+/g, " ").trim();
-    if (text.length < 2) continue;
-    const key = text.toLowerCase();
-    // A copy of a control's label, or a repeat of a block already kept (nav bars,
-    // ARIA duplicates), adds nothing.
-    if (names.has(key) || textSeen.has(key)) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) continue;
-    // Same order as the element pass: the cheap viewport test first, the
-    // expensive getComputedStyle only for blocks that survive it.
-    const onScreen = r.top < vh + 8 && r.bottom > -8 && r.left < vw + 8 && r.right > -8;
-    if (!onScreen) continue;
+    if (!(r.top < vh + 8 && r.bottom > -8 && r.left < vw + 8 && r.right > -8)) continue;  // before any style
     const st = getComputedStyle(el);
     if (st.visibility === "hidden" || st.display === "none" || parseFloat(st.opacity || "1") === 0) continue;
+    // Read only as far as a block can use: a whole file in one <pre> stops early.
+    let text = "";
+    for (const n of nodes) {
+      if (text.length > 2 * TEXT_CHARS) break;
+      if (readable(n, el)) text += " " + n.nodeValue.replace(/\s+/g, " ");
+    }
+    text = text.replace(/\s+/g, " ").trim();
+    const key = text.toLowerCase();
+    // Too short, a copy of a control's label, or a repeat (nav bars, ARIA duplicates).
+    if (text.length < 2 || names.has(key) || textSeen.has(key)) continue;
     textSeen.add(key);
-    textOut.push({text: text.slice(0, TEXT_CHARS),
-                  x: Math.round(r.left), y: Math.round(r.top),
+    textOut.push({text: text.slice(0, TEXT_CHARS), x: Math.round(r.left), y: Math.round(r.top),
                   w: Math.round(r.width), h: Math.round(r.height)});
     if (textOut.length >= TEXT_MAX) break;
   }
   textOut.sort((a, b) => (Math.abs(a.y - b.y) > 8 ? a.y - b.y : a.x - b.x));
-  textOut.forEach((o, i) => { o.e = "t" + i; });
   const sc = document.scrollingElement || document.documentElement;
   return {url: location.href, title: document.title, vw, vh, count: out.length, items: out,
           text: textOut,
@@ -204,15 +205,11 @@ class Element:
 class TextBlock:
     """One visible text block: evidence for the classifier, never a click target."""
 
-    evidence_id: str
     text: str
     x: int
     y: int
     w: int
     h: int
-
-    def label(self) -> str:
-        return f"{self.evidence_id}: {self.text!r}"
 
 
 @dataclass
@@ -264,14 +261,13 @@ def perceive(session: Any, *, budget: int = 120, text_budget: int = 120) -> Page
     ]
     text = [
         TextBlock(
-            evidence_id=str(tb.get("e", f"t{i}")),
             text=str(tb.get("text", "")),
             x=int(tb.get("x", 0)),
             y=int(tb.get("y", 0)),
             w=int(tb.get("w", 0)),
             h=int(tb.get("h", 0)),
         )
-        for i, tb in enumerate((data.get("text") or [])[:text_budget])
+        for tb in (data.get("text") or [])[:text_budget]
         if str(tb.get("text", "")).strip()
     ]
     return Page(
