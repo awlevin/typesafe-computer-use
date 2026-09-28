@@ -347,4 +347,13 @@ def actionable_elements(pid: int, display_w_pt: float, display_h_pt: float) -> t
     and whether a cap cut the walk short."""
     app = AS.AXUIElementCreateApplication(pid)
     AS.AXUIElementSetMessagingTimeout(app, AX_MESSAGE_TIMEOUT)
-    return walk_actionable(app, _ax_children, _ax_attrs, _ax_actions, display_w_pt, display_h_pt)
+    window = _ax_attr(app, AS.kAXFocusedWindowAttribute)
+    if window is None:
+        return walk_actionable(app, _ax_children, _ax_attrs, _ax_actions, display_w_pt, display_h_pt)
+    bar = _ax_attr(app, AS.kAXMenuBarAttribute)
+    roots = [window, *([bar] if bar is not None else [])]
+
+    def children(element):
+        return roots if element is app else _ax_children(element)
+
+    return walk_actionable(app, children, _ax_attrs, _ax_actions, display_w_pt, display_h_pt)
