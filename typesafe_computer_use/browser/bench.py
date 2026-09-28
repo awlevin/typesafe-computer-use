@@ -203,8 +203,12 @@ def benchmark_loop(args: argparse.Namespace) -> int:
             model=args.model,
             writer=writer,
             runfolder=runfolder,
+            max_handoffs=args.handoffs,
+            ask=input if args.ask else None,
         )
 
+    if result.answer:
+        print(f"\nanswer: {result.answer}")
     s = result.summary()
     print("-" * 118)
     print(f"outcome: {result.outcome}   steps: {s.get('steps')}   wall: {result.wall_ms:.0f}ms")
@@ -310,6 +314,8 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--fixture", action="store_true")
     q.add_argument("--goal", default=None)
     q.add_argument("--steps", type=int, default=10)
+    q.add_argument("--handoffs", type=int, default=10, help="maximum writer-to-classifier handoffs")
+    q.add_argument("--ask", action="store_true", help="allow the writer to ask the user a question")
     q.add_argument("--min-confidence", type=float, default=0.4)
     q.add_argument("--model", default=None)
     q.add_argument("--headed", action="store_true")

@@ -376,3 +376,56 @@ def compose_answer(
     return Answer(
         text=data["answer"].strip(), achieved=data["achieved"], focus=data["focus"].strip(), question=data["question"].strip()
     )
+
+
+def compose_browser_answer(
+    writer: Writer,
+    goal: str,
+    *,
+    url: str,
+    title: str,
+    page_text: list[str],
+    elements: list[str],
+    history: list[str],
+    stopped: str,
+    earlier: list[dict] | None = None,
+    guidance: Guidance | None = None,
+    earlier_stops: list[dict] | None = None,
+    can_ask: bool = False,
+    image: Image.Image | None = None,
+) -> Answer:
+    """Read the browser's final page, with plain visible strings rather than click IDs."""
+    packet = {
+        "goal": goal,
+        **(guidance.state() if guidance else {}),
+        "now": now_context(),
+        "why_the_run_stopped": stopped,
+        "actions_taken": history,
+        "user_can_be_asked": can_ask,
+        "browser_active_tab_url": url,
+        "page_title": title,
+        "screen_text_in_reading_order": page_text,
+        "visible_controls": elements,
+        **({"earlier_screens": earlier} if earlier else {}),
+        **({"earlier_stops": earlier_stops} if earlier_stops else {}),
+    }
+    data = _structured(
+        writer,
+        ANSWER_SYSTEM,
+        packet,
+        properties={
+            "achieved": {"type": "boolean"},
+            "answer": {"type": "string"},
+            "focus": {"type": "string"},
+            "question": {"type": "string"},
+        },
+        max_tokens=1024,
+        model=answer_model(),
+        image=image if writer_vision() else None,
+    )
+    return Answer(
+        text=data["answer"].strip(),
+        achieved=data["achieved"],
+        focus=data["focus"].strip(),
+        question=data["question"].strip(),
+    )

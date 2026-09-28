@@ -15,14 +15,19 @@ trip, and no fixed sleep.
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from PIL import Image
 from typesafe_sdk import TypeSafeClient
 
-from ..writer import Writer, compose_browser_text, compose_url, looks_credential
+from ..models import Guidance
+from ..writer import Writer, compose_browser_answer, compose_browser_text, compose_url, looks_credential, writer_vision
 from . import act
 from .decide import Decision, available_actions, decide, field_context, verify_typed
 from .perceive import Element, Page, perceive
@@ -62,6 +67,9 @@ class RunResult:
     steps: list[Step] = field(default_factory=list)
     wall_ms: float = 0.0
     url_after: str = ""
+    answer: str = ""
+    achieved: bool = False
+    handoffs: int = 0
 
     def summary(self) -> dict:
         if not self.steps:
@@ -151,6 +159,8 @@ def run_goal(
     model: str | None = None,
     writer: Writer | None = None,
     runfolder: RunFolder | None = None,
+    max_handoffs: int = 10,
+    ask: Callable[[str], str] | None = None,
 ) -> RunResult:
     result = RunResult(goal=goal, url=str(session.evaluate("location.href") or ""), outcome="incomplete")
     if start_url:
@@ -162,6 +172,9 @@ def run_goal(
     history: list[str] = []
     noops = 0
     started = time.perf_counter()
+    guidance = Guidance()
+    stops: list[dict] = []
+    earlier: list[dict] = []
 
     for n in range(1, max_steps + 1):
         step_started = time.perf_counter()
@@ -188,6 +201,7 @@ def run_goal(
             allow_type=allow_type,
             can_write=can_write,
             model=model,
+            guidance=guidance,
         )
         decide_ms = (time.perf_counter() - t0) * 1000
 
@@ -297,18 +311,87 @@ def run_goal(
             print(step.line(), flush=True)
         history.append(f"{kind}: {detail}" + ("" if changed else " (page unchanged)"))
 
-        if kind == "done" or decision.satisfied.noul >= 0.5:
-            result.outcome = "done"
-            break
-        if kind == "none":
-            result.outcome = "blocked"
-            break
-        if decision.confidence < min_confidence:
-            result.outcome = f"low_confidence({decision.confidence:.2f})"
-            break
-        if noops >= 2:
-            result.outcome = "stuck"
-            break
+        stopped = (
+            "done"
+            if kind == "done" or decision.satisfied.noul >= 0.5
+            else "blocked"
+            if kind == "none"
+            else f"low_confidence({decision.confidence:.2f})"
+            if decision.confidence < min_confidence
+            else "stuck"
+            if noops >= 2
+            else "max_steps"
+            if n == max_steps
+            else ""
+        )
+        if stopped:
+            result.outcome = stopped
+            if writer is None:
+                result.answer = "no answer: the writer is disabled"
+            else:
+                # A post-action observation is the only up-to-date page to review.
+                final = pending or page
+                if touched and pending is None:
+                    final = perceive(session)
+                pending = None
+                can_resume = n < max_steps and result.handoffs < max_handoffs
+                reviews: list[dict] = []
+                for _ in range(3):  # bound unanswered question rounds
+                    image = None
+                    try:
+                        if writer_vision():
+                            shot = session.call("Page.captureScreenshot", {"format": "png"})
+                            image = Image.open(io.BytesIO(base64.b64decode(shot["data"]))).convert("RGB")
+                        answer = compose_browser_answer(
+                            writer,
+                            goal,
+                            url=final.url,
+                            title=final.title,
+                            page_text=[tb.text for tb in final.text],
+                            elements=[e.label() for e in final.items],
+                            history=history,
+                            stopped=stopped,
+                            earlier=earlier[-8:],
+                            guidance=guidance,
+                            earlier_stops=stops,
+                            can_ask=can_resume and ask is not None,
+                            image=image,
+                        )
+                    except Exception as exc:
+                        # Provider errors and failed captures stop safely.
+                        result.answer = f"no answer: the writer failed ({type(exc).__name__})"
+                        if runfolder is not None:
+                            reviews.append({"error": str(exc)[:400]})
+                        break
+                    result.answer, result.achieved = answer.text, answer.achieved
+                    review = {"why": stopped, **asdict(answer), "reply": None, "handed_back": False}
+                    reviews.append(review)
+                    if can_resume and not answer.achieved and answer.question and ask is not None:
+                        reply = ask(answer.question).strip()
+                        review["reply"] = reply
+                        if reply:
+                            guidance = guidance.heard(answer.question, reply)
+                            continue
+                    if (
+                        can_resume
+                        and not answer.achieved
+                        and answer.focus
+                        and (not stops or stops[-1]["focus_given"] != answer.focus or stops[-1]["actions"] < len(history) - 1)
+                    ):
+                        guidance = guidance.focused(answer.focus)
+                        stops.append({"why": stopped, "focus_given": answer.focus, "actions": len(history)})
+                        result.handoffs += 1
+                        review["handed_back"] = True
+                        noops = 0
+                        pending = final
+                    break
+                if runfolder is not None:
+                    runfolder.path(f"step-{n:02d}-review.json").write_text(json.dumps(reviews, indent=2))
+            if pending is None:
+                break
+        # Save bounded prior visible pages, so a result left behind is still available.
+        if not earlier or earlier[-1]["page_text"] != [tb.text for tb in page.text]:
+            earlier.append({"url": page.url, "title": page.title, "page_text": [tb.text for tb in page.text]})
     else:
         result.outcome = "max_steps"
 
@@ -323,6 +406,9 @@ def run_goal(
                 "url_after": result.url_after,
                 "wall_ms": result.wall_ms,
                 "summary": result.summary(),
+                "answer": result.answer,
+                "achieved": result.achieved,
+                "handoffs": result.handoffs,
                 "steps": [asdict(s) for s in result.steps],
             }
         )
@@ -339,6 +425,9 @@ def save(result: RunResult, path: Path) -> None:
                 "url_after": result.url_after,
                 "wall_ms": result.wall_ms,
                 "summary": result.summary(),
+                "answer": result.answer,
+                "achieved": result.achieved,
+                "handoffs": result.handoffs,
                 "steps": [asdict(s) for s in result.steps],
             },
             indent=2,
