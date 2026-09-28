@@ -59,6 +59,11 @@ def fixed_actions(browser: str, email: str | None) -> dict[str, str]:
     return actions
 
 
+def has_back_button(items: list[Item]) -> bool:
+    """A named, on-screen AX button makes the keyboard Back action redundant."""
+    return any(it.from_ax and it.role == "button" and it.text.strip().casefold() in {"back", "go back"} for it in items)
+
+
 def kind_criteria(browser: str, email: str | None, offscreen: bool = False) -> dict[str, str]:
     clicks = {"click_item": "Click one of the on-screen text items (chosen in the item question)."}
     if offscreen:
@@ -211,6 +216,9 @@ def decide(
     tried: list[str] | None = None,
     guidance: Guidance | None = None,
 ) -> Decision:
+    kinds = kind_criteria(browser, email, bool(screen.offscreen))
+    if has_back_button(items):
+        kinds.pop("go_back", None)
     questions = {
         "kind": Choice(
             instructions=(
@@ -220,7 +228,7 @@ def decide(
                 "tried on this screen: each of those led straight back here."
                 + (FOCUS_RULE if guidance and guidance.focus else "")
             ),
-            criteria=kind_criteria(browser, email, bool(screen.offscreen)),
+            criteria=kinds,
         ),
         "site": Choice(
             instructions=(

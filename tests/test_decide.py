@@ -5,6 +5,7 @@ from typesafe_computer_use.config import SITES
 from typesafe_computer_use.decide import (
     Decision,
     base_state,
+    decide,
     item_criteria,
     kind_criteria,
     offscreen_criteria,
@@ -46,6 +47,39 @@ def test_decision_press_offscreen_uses_the_offscreen_answer_and_min_confidence()
 def test_decision_ignores_an_offscreen_answer_for_any_other_kind():
     d = Decision(kind=answer("click_item", 0.9), item=answer("3", 0.8), site=answer("none", 1.0), offscreen=answer("7", 0.1))
     assert not d.pressing_offscreen and d.chosen == "3" and d.confidence == 0.8
+
+
+def test_on_screen_back_button_removes_duplicate_go_back_kind(screen, make_item):
+    class Client:
+        def system_one(self, *, state, questions):
+            self.kinds = questions["kind"].criteria
+            return SimpleNamespace(
+                answers={"kind": answer("click_item", 0.71), "item": answer("0", 0.99), "site": answer("none", 1.0)}
+            )
+
+    client = Client()
+    button = replace(make_item(0, "Go Back"), role="button", source="ax")
+    decision = decide(client, "go back", screen, [button], [], "Google Chrome", None)
+    assert decision.chosen == "0"
+    assert "go_back" not in client.kinds
+
+
+def test_back_action_remains_for_ocr_text_or_other_buttons(screen, make_item):
+    class Client:
+        def system_one(self, *, state, questions):
+            self.kinds = questions["kind"].criteria
+            return SimpleNamespace(
+                answers={"kind": answer("go_back", 0.9), "item": answer("0", 0.2), "site": answer("none", 1.0)}
+            )
+
+    for item in (
+        make_item(0, "Back"),
+        replace(make_item(0, "Back"), role="link", source="ax"),
+        replace(make_item(0, "Back to top"), role="button", source="ax"),
+    ):
+        client = Client()
+        decide(client, "go back", screen, [item], [], "Google Chrome", None)
+        assert "go_back" in client.kinds
 
 
 def test_kind_criteria_offers_press_offscreen_only_when_there_are_offscreen_controls():
