@@ -38,28 +38,31 @@ def test_region_is_the_whole_capture_without_a_window():
     assert ocr_region(screen_with(None)) == (0.0, 0.0, 2000.0, 1200.0)
 
 
-def test_region_covers_the_window_with_a_margin_and_the_menu_bar():
-    # window 100..500 pt vertically, scale 2, so 200..1000 px, plus an 8 pt margin below it
+def test_region_covers_the_window_with_a_margin():
     region = ocr_region(screen_with((50.0, 100.0, 600.0, 400.0)))
-    assert region == ((50.0 - 8.0) * 2, 0.0, (50.0 + 600.0 + 8.0) * 2, (100.0 + 400.0 + 8.0) * 2)
+    assert region == ((50.0 - 8.0) * 2, (100.0 - 8.0) * 2, (50.0 + 600.0 + 8.0) * 2, (100.0 + 400.0 + 8.0) * 2)
 
 
-def test_region_clips_the_menu_bar_strip_to_the_window_columns():
-    """The strip reaches the top of the display but never past the window's own sides."""
-    region = ocr_region(screen_with((300.0, 200.0, 400.0, 300.0)))
-    assert region[0] == (300.0 - 8.0) * 2 and region[2] == (300.0 + 400.0 + 8.0) * 2
-    assert region[1] == 0.0  # up to the menu bar
-    assert region[2] < 2000.0  # the clock and the menu extras to the right go unread
+def test_low_window_does_not_ocr_background_above_it(monkeypatch):
+    screen = screen_with((50.0, 609.0, 600.0, 400.0), width=5120, height=2880, scale=2.0)
+    region = ocr_region(screen)
+    assert region == (84.0, 1202.0, 1316.0, 2034.0)
+    assert region[1] > 80.0  # the menu bar and the terminal above the window stay outside
+
+    def recognize_text(crop):
+        assert crop.size == (1232, 832)
+        return [("Finder item", 0.9, (10.0, 10.0, 110.0, 30.0))]
+
+    monkeypatch.setattr(desktop, "recognize_text", recognize_text)
+    lines, area_pct, _ = ocr_lines(screen)
+    assert lines == [("Finder item", 0.9, (94.0, 1212.0, 194.0, 1232.0))]
+    assert area_pct < 8.0
 
 
-def test_region_reaches_the_menu_bar_even_for_a_window_low_on_the_display():
-    region = ocr_region(screen_with((50.0, 400.0, 600.0, 100.0)))
-    assert region[1] == 0.0  # the menu bar strip is always read
-
-
-def test_region_is_at_least_the_menu_bar_strip_for_a_window_above_it():
-    region = ocr_region(screen_with((50.0, 0.0, 600.0, 10.0)))
-    assert region[3] == perception.MENU_BAR_PT * 2
+def test_region_keeps_top_window_and_clamps_offscreen_edges():
+    assert ocr_region(screen_with((50.0, 0.0, 600.0, 100.0))) == (84.0, 0.0, 1316.0, 216.0)
+    assert ocr_region(screen_with((-20.0, -20.0, 120.0, 80.0))) == (0.0, 0.0, 216.0, 136.0)
+    assert ocr_region(screen_with((900.0, 500.0, 200.0, 200.0))) == (1784.0, 984.0, 2000.0, 1200.0)
 
 
 def test_region_clamps_a_window_larger_than_the_display():

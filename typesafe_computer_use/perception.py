@@ -21,7 +21,6 @@ MIN_TOKEN_OVERLAP = 0.5
 # OCR costs about two thirds of a step, and it scales with the amount of text, so the way to make it
 # cheaper is to read less of the screen: the frontmost window's own columns instead of the display,
 # and within them only the blobs of tiles that changed since the previous capture, one crop each.
-MENU_BAR_PT = 40.0  # the strip above every window, which the app's own menus live in
 REGION_MARGIN_PT = 8.0  # slack around the window, for the shadow and a clipped glyph
 THUMB_DIVISOR = 8  # the change detector works on a 1/8 scale grayscale copy
 TILE_PX = 256.0  # tile side in capture pixels
@@ -211,13 +210,10 @@ def _read_region(screen: Screen, region: Box, thumb: Image.Image, cache: OcrCach
 def ocr_region(screen: Screen) -> Box:
     """The part of the capture worth reading, in capture pixels.
 
-    The frontmost window with a margin, joined with the menu bar strip over the same columns and
-    clamped to the display. Text on the desktop and in background windows is noise to the decision,
-    so it is left unread. Clipping the strip to the window's x-range is what makes the crop worth
-    anything on a full-height window, whose own rectangle already reaches the bottom of the display.
-
-    The cost is that status items to the right of the window, the clock and the menu extras, go
-    unread. They stay clickable: the accessibility tree lists them as AXMenuBarItem controls.
+    Read the frontmost window with a small margin, clamped to the display. A low window
+    must not pull the entire column above it into OCR: that area belongs to background
+    windows. Menu-bar controls remain available through the accessibility tree, though
+    text visible only in the menu strip will no longer be read by OCR.
     """
     width, height = float(screen.image.width), float(screen.image.height)
     if screen.window is None:
@@ -225,8 +221,7 @@ def ocr_region(screen: Screen) -> Box:
     x, y, w, h = screen.window
     scale, margin = screen.scale, REGION_MARGIN_PT
     window = ((x - margin) * scale, (y - margin) * scale, (x + w + margin) * scale, (y + h + margin) * scale)
-    joined = (window[0], min(window[1], 0.0), window[2], max(window[3], MENU_BAR_PT * scale))
-    clamped = (max(0.0, joined[0]), max(0.0, joined[1]), min(width, joined[2]), min(height, joined[3]))
+    clamped = (max(0.0, window[0]), max(0.0, window[1]), min(width, window[2]), min(height, window[3]))
     return clamped if clamped[2] > clamped[0] and clamped[3] > clamped[1] else (0.0, 0.0, width, height)
 
 
