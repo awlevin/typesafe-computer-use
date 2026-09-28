@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 import pytest
+from conftest import busy_page
 
 from typesafe_computer_use import perception
 from typesafe_computer_use.ax_walk import AxAttrs, walk_actionable
@@ -244,7 +245,7 @@ def test_ax_refs_follow_items_through_the_merge_and_the_renumbering(screen, monk
             Item(1, "Unrelated text", 0.9, 100.0, 400.0, 300.0, 430.0),
         ],
     )
-    live = replace(screen, pid=123)
+    live = replace(screen, pid=123, image=busy_page(screen.image.size))
     items = perception.perceive(live, 255, "goal")
     assert [(it.index, it.text, it.source) for it in items] == [
         (0, "Left", "ax+ocr"),

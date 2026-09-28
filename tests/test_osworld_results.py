@@ -72,6 +72,29 @@ def test_a_jev_task_reads_score_steps_time_and_tokens(tmp_path):
     assert "typesafe-classifier: 7 requests, 21,000 in, 0 cached in, 70 out" in text
 
 
+def test_another_agents_usage_json_gives_its_tokens(tmp_path):
+    folder = task_folder(tmp_path, "gpt-6-luna", "screenshot")
+    (folder / "result.txt").write_text("0.0\n", encoding="utf-8")
+    trajectory(folder, action(1, "20260925@120000000000"))
+    usage = {"requests": 3, "input_tokens": 5000, "cached_input_tokens": 9000, "output_tokens": 800, "reasoning_tokens": 600}
+    (folder / "usage.json").write_text(json.dumps({"usage": {"gpt-6-luna": usage}, "seconds": 20.0}), encoding="utf-8")
+
+    (result,) = results.read(tmp_path)
+
+    assert result.jev is None
+    assert result.usage == {"gpt-6-luna": results.Usage(3, 5000, 9000, 800, 600)}
+    text = "\n".join(results.describe(result))
+    assert "gpt-6-luna: 3 requests, 5,000 in, 9,000 cached in, 800 out (600 reasoning)" in text
+
+
+def test_an_agent_without_usage_json_has_no_tokens(tmp_path):
+    folder = task_folder(tmp_path, "gpt-6-luna", "screenshot")
+    (folder / "result.txt").write_text("1.0\n", encoding="utf-8")
+    (result,) = results.read(tmp_path)
+    assert result.usage == {}
+    assert "tokens" not in "\n".join(results.describe(result))
+
+
 def test_another_agent_has_no_jev_lines(tmp_path):
     folder = task_folder(tmp_path, "gpt-6-luna", "screenshot")
     (folder / "result.txt").write_text("0.0", encoding="utf-8")

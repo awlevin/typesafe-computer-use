@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PIL import Image
+from conftest import busy_page
 from world import FakeTypeSafe, FakeWriter, scripted
 
 from typesafe_computer_use import runner
@@ -36,7 +36,7 @@ CLEAR = "pyautogui.hotkey('ctrl', 'a'); pyautogui.press('delete')"
 
 def png(size: tuple[int, int] = DISPLAY) -> bytes:
     out = BytesIO()
-    Image.new("RGB", size, "white").save(out, format="PNG")
+    busy_page(size).save(out, format="PNG")  # drawn under every control, so the tree's controls all count
     return out.getvalue()
 
 

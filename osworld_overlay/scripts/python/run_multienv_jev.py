@@ -1,7 +1,8 @@
 # OSWorld's generic runner with jev as the agent. A copy of OSWorld-V2's
 # scripts/python/run_multienv.py at commit 3d778a3c9a34a079316f70df023b166700445792 (tag
 # osworld-v2.1), changed only to build JevAgent (with the required --ocr), to point it at each
-# task's result folder, and to read AWS's image map only for the AWS provider. To take an OSWorld
+# task's result folder, to read AWS's image map only for the AWS provider, and to leave OSWorld's
+# proxy off, since it needs credentials of OSWorld's own that this setup lacks. To take an OSWorld
 # update, re-copy that file at the new commit and make the same changes again; each one is marked
 # "jev:".
 from __future__ import annotations
@@ -222,7 +223,7 @@ def run_env_tasks(task_queue: Queue, args: argparse.Namespace, shared_scores: li
             headless=args.headless,
             os_type="Ubuntu",
             require_a11y_tree=args.observation_type in ["a11y_tree", "screenshot_a11y_tree", "som"],
-            enable_proxy=True,
+            enable_proxy=False,  # jev: OSWorld's proxy needs credentials of its own; without them no page loads
             client_password=args.client_password,
             force_disable_vnc=not getattr(args, "enable_vnc", False),
             force_disable_recording=not getattr(args, "enable_recording", False),

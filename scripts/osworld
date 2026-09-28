@@ -3,12 +3,13 @@
 #
 #   scripts/osworld setup                        clone OSWorld at the pinned commit into .osworld/, install it and jev
 #   scripts/osworld setup --v2-tasks             the same, plus OSWorld 2.0's gated task files (needs HF_TOKEN)
-#   scripts/osworld run-jev DOMAIN/ID --ocr OCR  run one task with jev, reading the screen with the OCR backend named
-#   scripts/osworld run-luna DOMAIN/ID           run the same task with OSWorld's GPT agent and gpt-6-luna
+#   scripts/osworld run-jev TASK... --ocr OCR    run tasks with jev, reading the screen with the OCR backend named
+#   scripts/osworld run-luna TASK...             run the same tasks with OSWorld's GPT agent and gpt-6-luna
 #   scripts/osworld results [FOLDER]             each task's score, steps, and time, and jev's tokens (FOLDER: results/)
 #
 # A task is DOMAIN/ID: chrome/<id> names OSWorld 1.0's evaluation_examples/examples/chrome/<id>.json,
-# and tasks/<id> a 2.0 task that `setup --v2-tasks` downloaded. OSWorld runs each task in a VM, so a
+# and tasks/<id> a 2.0 task that `setup --v2-tasks` downloaded. Several tasks run one after another,
+# each in a fresh VM, and must be all 1.0 or all 2.0. OSWorld runs each task in a VM, so a
 # run needs a Linux host with KVM. OSWORLD_PROVIDER is OSWorld's VM provider (default docker), and
 # OSWORLD_OCR=rapidocr makes setup install jev's rapidocr extra. Every command reads this repo's .env
 # first, so those and the API keys can live there. Results land in results/; an earlier run of the
@@ -35,6 +36,9 @@ SLEEP_AFTER_EXECUTION=2.0
 JEV_MODEL=jev  # the name OSWorld files jev's results under
 JEV_OBSERVATION=screenshot_a11y_tree
 LUNA_MODEL=gpt-6-luna
+# The GPT runner's own default. It sets Luna's accuracy and cost more than anything else, so it is
+# named here, and each task's usage.json records it. OSWORLD_LUNA_EFFORT picks another.
+LUNA_EFFORT=${OSWORLD_LUNA_EFFORT:-xhigh}
 
 usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -172,27 +176,60 @@ eval_version() {
   fi
 }
 
-# The one-task test list OSWorld's runners read: {"<domain>": ["<id>"]}.
+# The eval version the tasks share; they cannot mix, since a runner takes one.
+shared_version() {
+  local version="" task v
+  for task in "$@"; do
+    v=$(eval_version "$task")
+    [[ -z "$version" || "$v" == "$version" ]] || die "the tasks mix OSWorld 1.0 and 2.0; run each kind separately"
+    version=$v
+  done
+  echo "$version"
+}
+
+# The test list OSWorld's runners read, {"<domain>": ["<id>", ...]}, in the order given. One task's
+# list is named after the task, a longer one after a hash of its tasks. check_task has kept quotes
+# and backslashes out of every task, so plain printf makes valid JSON.
 task_meta() {
-  local domain=${1%%/*} id=${1#*/}
-  local meta="$REPO/.osworld/tasks/${domain}__$id.json"
-  echo "+ writing the one-task list $meta" >&2
+  local name meta json="" domains=() domain task ids
+  if [[ $# -eq 1 ]]; then
+    name="${1%%/*}__${1#*/}"
+  else
+    name="list-$(printf '%s\n' "$@" | cksum | cut -d' ' -f1)"
+  fi
+  for task in "$@"; do
+    [[ " ${domains[*]-} " == *" ${task%%/*} "* ]] || domains+=("${task%%/*}")
+  done
+  for domain in "${domains[@]}"; do
+    ids=""
+    for task in "$@"; do
+      [[ "${task%%/*}" == "$domain" ]] && ids+="${ids:+, }\"${task#*/}\""
+    done
+    json+="${json:+, }\"$domain\": [$ids]"
+  done
+  meta="$REPO/.osworld/tasks/$name.json"
+  echo "+ writing the task list $meta" >&2
   mkdir -p "$(dirname "$meta")"
-  printf '{"%s": ["%s"]}\n' "$domain" "$id" >"$meta"
+  printf '{%s}\n' "$json" >"$meta"
   echo "$meta"
 }
 
 # OSWorld's runners skip a task that already has a result, and empty the folder of one that has
-# none, which fails on jev's run folder inside it. So before a run, the task's earlier result, and
+# none, which fails on jev's run folder inside it. So before a run, each task's earlier result, and
 # any unfinished one of the same agent, move to results/archive/<time>/.
 archive_earlier() {
-  local model=$1 task=$2 stamp dir rel dest
+  local model=$1 stamp dir rel dest task rerun
+  shift
   stamp=$(date +%Y%m%d-%H%M%S)
   for dir in "$RESULTS"/*/*/"$model"/*/*; do
     [[ -d "$dir" ]] || continue
     rel=${dir#"$RESULTS"/}
     case "$rel" in archive/*) continue ;; esac
-    if [[ "${rel#*/*/*/}" == "$task" || ! -f "$dir/result.txt" ]]; then
+    rerun=false
+    for task in "$@"; do
+      if [[ "${rel#*/*/*/}" == "$task" ]]; then rerun=true; fi
+    done
+    if $rerun || [[ ! -f "$dir/result.txt" ]]; then
       dest="$RESULTS/archive/$stamp/$rel"
       run mkdir -p "$(dirname "$dest")"
       run mv "$dir" "$dest"
@@ -209,17 +246,17 @@ check_provider() {
 }
 
 run_jev() {
-  local task="" ocr=""
+  local tasks=() ocr="" task
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --ocr) [[ $# -gt 1 ]] || die "--ocr needs a backend"; ocr=$2; shift ;;
       --ocr=*) ocr=${1#--ocr=} ;;
-      -*) die "run-jev takes DOMAIN/ID --ocr OCR, not $1" ;;
-      *) [[ -z "$task" ]] || die "run-jev runs one task"; task=$1 ;;
+      -*) die "run-jev takes TASK... --ocr OCR, not $1" ;;
+      *) tasks+=("$1") ;;
     esac
     shift
   done
-  [[ -n "$task" ]] || die "run-jev needs a task: scripts/osworld run-jev DOMAIN/ID --ocr OCR"
+  [[ ${#tasks[@]} -gt 0 ]] || die "run-jev needs a task: scripts/osworld run-jev DOMAIN/ID... --ocr OCR"
   if [[ -z "$ocr" ]]; then
     local known="unknown until scripts/osworld setup has run"
     if [[ -x "$PYTHON" ]]; then
@@ -229,7 +266,7 @@ run_jev() {
     die "run-jev needs --ocr OCR: a result depends on the OCR that read the screen, so every run" \
       "names it. Backends: $known"
   fi
-  check_task "$task"
+  for task in "${tasks[@]}"; do check_task "$task"; done
   require_setup
   check_provider
   [[ -n "${TYPESAFE_API_KEY:-}" ]] || die "TYPESAFE_API_KEY is not set (export it or put it in .env)"
@@ -245,9 +282,9 @@ except (ValueError, RuntimeError) as error:
     sys.exit(f"scripts/osworld: {error}")' "$ocr" "$PROVIDER"
 
   local version meta
-  version=$(eval_version "$task")
-  meta=$(task_meta "$task")
-  archive_earlier "$JEV_MODEL" "$task"
+  version=$(shared_version "${tasks[@]}")
+  meta=$(task_meta "${tasks[@]}")
+  archive_earlier "$JEV_MODEL" "${tasks[@]}"
   run_in_checkout .venv/bin/python scripts/python/run_multienv_jev.py \
     --ocr "$ocr" \
     --model "$JEV_MODEL" \
@@ -265,20 +302,22 @@ except (ValueError, RuntimeError) as error:
 }
 
 run_luna() {
-  [[ $# -eq 1 ]] || die "run-luna runs one task: scripts/osworld run-luna DOMAIN/ID"
-  local task=$1
-  check_task "$task"
+  [[ $# -gt 0 ]] || die "run-luna needs a task: scripts/osworld run-luna DOMAIN/ID..."
+  local task
+  for task in "$@"; do check_task "$task"; done
   require_setup
   check_provider
   [[ -n "${OPENAI_API_KEY:-}" ]] || die "OPENAI_API_KEY is not set (export it or put it in .env)"
 
   local version meta
-  version=$(eval_version "$task")
-  meta=$(task_meta "$task")
-  archive_earlier "$LUNA_MODEL" "$task"
-  # The observation type is left to the script's default.
-  run_in_checkout .venv/bin/python scripts/python/run_multienv_gpt_response_api.py \
+  version=$(shared_version "$@")
+  meta=$(task_meta "$@")
+  archive_earlier "$LUNA_MODEL" "$@"
+  # OSWorld's GPT runner as it ships, but for the proxy and the tokens (see its header). The
+  # observation type is left to its default, the screenshot.
+  run_in_checkout .venv/bin/python scripts/python/run_multienv_luna.py \
     --model "$LUNA_MODEL" \
+    --reasoning_effort "$LUNA_EFFORT" \
     --provider_name "$PROVIDER" \
     --max_steps "$MAX_STEPS" \
     --sleep_after_execution "$SLEEP_AFTER_EXECUTION" \

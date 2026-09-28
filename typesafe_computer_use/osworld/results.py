@@ -3,7 +3,8 @@
 OSWorld files each task under `<results>/<action_space>/<observation_type>/<model>/<domain>/<task_id>/`:
 `result.txt` holds the score and `traj.jsonl` one line per action, with its time. jev adds its own
 run folder there, `jev/`, whose `run.json` holds jev's outcome, its tokens per model, and what the
-run ran on: the OCR backend, OSWorld's provider, and the machine's architecture.
+run ran on: the OCR backend, OSWorld's provider, and the machine's architecture. The Luna runner
+writes `usage.json` there instead, with its tokens in the same shape (see `usage.py`).
 
 `scripts/osworld results` prints this. It reads files only, so it runs anywhere, with no OSWorld
 checkout. Earlier runs that `scripts/osworld` moved aside live under `<results>/archive/` and are
@@ -21,6 +22,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .usage import USAGE_FILE
+
 ARCHIVE = "archive"  # where scripts/osworld moves earlier runs, inside the results folder
 RUN_FOLDER = "jev"  # jev's run folder, inside a task's result folder (see agent.py)
 TIMESTAMP = "%Y%m%d@%H%M%S%f"  # how OSWorld's runner stamps each action in traj.jsonl
@@ -32,6 +35,7 @@ class Usage:
     input_tokens: int = 0  # uncached
     cached_input_tokens: int = 0
     output_tokens: int = 0
+    reasoning_tokens: int = 0  # part of output_tokens; only the Responses API reports them
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,7 @@ class TaskResult:
     seconds: float | None  # from the first action to the last
     errors: list[str]
     jev: Jev | None  # None for an agent that is not jev
+    usage: dict[str, Usage] = field(default_factory=dict)  # tokens per model: jev's run.json, or usage.json
 
 
 def read(root: Path) -> list[TaskResult]:
@@ -80,6 +85,7 @@ def task(folder: Path) -> TaskResult:
     score_file = folder / "result.txt"
     score = score_file.read_text(encoding="utf-8").strip() if score_file.is_file() else None
     steps, actions, seconds, errors = _trajectory(folder / "traj.jsonl")
+    jev = _jev(folder / RUN_FOLDER / "run.json")
     return TaskResult(
         folder=folder,
         action_space=action_space,
@@ -92,7 +98,8 @@ def task(folder: Path) -> TaskResult:
         actions=actions,
         seconds=seconds,
         errors=errors,
-        jev=_jev(folder / RUN_FOLDER / "run.json"),
+        jev=jev,
+        usage=jev.usage if jev is not None else _usage_file(folder / USAGE_FILE),
     )
 
 
@@ -128,10 +135,7 @@ def _jev(path: Path) -> Jev | None:
     except json.JSONDecodeError:
         return Jev(outcome="run.json is not valid JSON", seconds=None, ocr=None, provider=None, architecture=None)
     osworld = summary.get("osworld") or {}
-    usage = {
-        model: Usage(**{name: int(counts.get(name) or 0) for name in Usage.__dataclass_fields__})
-        for model, counts in (summary.get("usage") or {}).items()
-    }
+    usage = _usage(summary)
     return Jev(
         outcome=summary.get("outcome"),
         seconds=summary.get("seconds"),
@@ -140,6 +144,21 @@ def _jev(path: Path) -> Jev | None:
         architecture=osworld.get("architecture"),
         usage=usage,
     )
+
+
+def _usage(summary: dict) -> dict[str, Usage]:
+    return {
+        model: Usage(**{name: int(counts.get(name) or 0) for name in Usage.__dataclass_fields__})
+        for model, counts in (summary.get("usage") or {}).items()
+    }
+
+
+def _usage_file(path: Path) -> dict[str, Usage]:
+    """An agent's own usage.json, for an agent that is not jev; empty when it wrote none."""
+    try:
+        return _usage(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return {}
 
 
 def duration(seconds: float) -> str:
@@ -169,14 +188,15 @@ def describe(result: TaskResult) -> list[str]:
         if jev.seconds is not None:
             ended += f" after {duration(jev.seconds)}"
         row("jev", f"{ended}; ocr {jev.ocr}, provider {jev.provider}, architecture {jev.architecture}")
-        label = "tokens"
-        for model, used in sorted(jev.usage.items()):
-            row(
-                label,
-                f"{model}: {used.requests:,} request{'' if used.requests == 1 else 's'}, {used.input_tokens:,} in, "
-                f"{used.cached_input_tokens:,} cached in, {used.output_tokens:,} out",
-            )
-            label = ""
+    label = "tokens"
+    for model, used in sorted(result.usage.items()):
+        reasoning = f" ({used.reasoning_tokens:,} reasoning)" if used.reasoning_tokens else ""
+        row(
+            label,
+            f"{model}: {used.requests:,} request{'' if used.requests == 1 else 's'}, {used.input_tokens:,} in, "
+            f"{used.cached_input_tokens:,} cached in, {used.output_tokens:,} out{reasoning}",
+        )
+        label = ""
     lines.append(f"  {'folder':<12} {result.folder}")
     return lines
 

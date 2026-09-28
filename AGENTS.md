@@ -1,5 +1,8 @@
 # Agent rules
 
+Read [VISION.md](VISION.md) first: what jev is for, in a dozen lines. Weigh every design choice
+against it.
+
 This tool drives a real computer. When you work on it, you are almost always on the
 maintainer's own Mac, often while they are using it.
 

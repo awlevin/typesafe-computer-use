@@ -156,6 +156,15 @@ def screen() -> Screen:
     return Screen(image=Image.new("RGB", (2000, 1200)), scale=2.0, app="Google Chrome", field=None, url=None)
 
 
+def busy_page(size: tuple[int, int]) -> Image.Image:
+    """A white page ruled with a gray line every third row: something is drawn under every control on
+    it, so none reads as hidden (see `perception.drawn`)."""
+    image = Image.new("RGB", size, "white")
+    for y in range(0, size[1], 3):
+        image.paste((180, 180, 180), (0, y, size[0], y + 1))
+    return image
+
+
 def item(index: int, text: str, x1=100, y1=100, x2=400, y2=130, conf=1.0) -> Item:
     return Item(index, text, conf, x1, y1, x2, y2)
 

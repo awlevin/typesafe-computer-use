@@ -91,7 +91,7 @@ def run(cfg: RunConfig, ctx_factory) -> RunState:
     log = Log(cfg.out / "run.log")
     log(f"run folder: {cfg.out}")
     if cfg.act:
-        log("driving the machine. abort: Ctrl-C, or slam the mouse into the top-left corner.")
+        log(f"driving the machine. abort: {desktop.abort_hint()}.")
 
     state = RunState()
     started = time.time()

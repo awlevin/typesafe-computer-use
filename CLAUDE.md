@@ -1,1 +1,2 @@
 @AGENTS.md
+@VISION.md

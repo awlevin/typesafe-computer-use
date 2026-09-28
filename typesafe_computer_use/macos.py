@@ -40,6 +40,10 @@ def check_abort() -> None:
         raise Abort("mouse in top-left corner")
 
 
+def abort_hint() -> str:
+    return "Ctrl-C, or slam the mouse into the top-left corner"
+
+
 def sleep_watching(seconds: float) -> None:
     end = time.monotonic() + seconds
     while time.monotonic() < end:

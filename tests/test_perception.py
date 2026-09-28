@@ -1,5 +1,11 @@
-from typesafe_computer_use.models import Item
+from pathlib import Path
+
+from PIL import Image, ImageDraw
+
+from typesafe_computer_use import perception
+from typesafe_computer_use.models import AxNode, Item, Screen
 from typesafe_computer_use.perception import (
+    drawn,
     goal_echoes,
     is_echo,
     merge_blocks,
@@ -7,6 +13,7 @@ from typesafe_computer_use.perception import (
     order_items,
     to_items,
 )
+from typesafe_computer_use.platform_adapter import desktop
 
 
 def line(text, x1, y1, x2, y2, conf=1.0):
@@ -117,3 +124,66 @@ def test_budget_falls_back_to_dropping_controls_when_only_controls_remain():
 def test_order_items_renumbers_rows_then_columns():
     items = [ocr_item(7, "right", 800, 100, 900, 130), ocr_item(2, "left", 100, 105, 200, 135)]
     assert [(it.index, it.text) for it in order_items(items)] == [(0, "left"), (1, "right")]
+
+
+# ----- a control the capture does not show ---------------------------------------------------
+
+FIXTURES = Path(__file__).parent / "fixtures" / "osworld"
+
+
+def control(x: float, y: float, w: float, h: float, label: str = "Agency") -> AxNode:
+    return AxNode(role="AXComboBox", label=label, x=x, y=y, w=w, h=h, pressable=True)
+
+
+def page(size=(300, 120)) -> Image.Image:
+    return Image.new("RGB", size, (232, 236, 244))
+
+
+def test_a_flat_box_is_not_drawn():
+    assert not drawn(page(), control(20, 20, 200, 30), 1.0)
+
+
+def test_an_empty_field_is_drawn_by_its_border():
+    image = page()
+    ImageDraw.Draw(image).rectangle((20, 20, 220, 50), outline=(40, 40, 40))
+    assert drawn(image, control(20, 20, 201, 31), 1.0)
+
+
+def test_a_label_inside_is_drawn():
+    image = page()
+    ImageDraw.Draw(image).rectangle((60, 30, 90, 40), fill=(30, 30, 30))
+    assert drawn(image, control(20, 20, 200, 30), 1.0)
+
+
+def test_a_neighbours_border_over_the_top_edge_does_not_count():
+    """Chosen's clipped search box starts on the bottom border of the control above it."""
+    image = page()
+    ImageDraw.Draw(image).rectangle((10, 0, 250, 21), outline=(40, 40, 40))
+    assert not drawn(image, control(20, 20, 200, 30), 1.0)
+
+
+def test_the_scale_maps_points_to_capture_pixels():
+    image = page((600, 240))
+    ImageDraw.Draw(image).rectangle((120, 60, 180, 80), fill=(30, 30, 30))
+    assert drawn(image, control(20, 20, 200, 30), 2.0)
+    assert not drawn(image, control(20, 80, 200, 30), 2.0)
+
+
+def test_chosens_closed_dropdown_shows_its_trigger_and_hides_its_search_box():
+    """A crop of justice.gov's Forms page in OSWorld, at (780, 560) on the screen, with the frames
+    Chrome reported for the Agency filter: Chosen's trigger, and the search box of its closed panel."""
+    image = Image.open(FIXTURES / "chosen-dropdown-closed.png").convert("RGB")
+    assert drawn(image, control(837 - 780, 668 - 560, 405, 32, "-Any-"), 1.0)
+    assert not drawn(image, control(842 - 780, 697 - 560, 435, 31), 1.0)
+
+
+def test_perceive_offers_a_hidden_control_off_the_list(monkeypatch):
+    image = page((400, 200))
+    ImageDraw.Draw(image).rectangle((20, 20, 120, 50), outline=(40, 40, 40))
+    shown, hidden = control(20, 20, 101, 31, "Title"), control(20, 120, 200, 30)
+    monkeypatch.setattr(desktop, "actionable_elements", lambda pid, w, h: ([shown, hidden], [], False))
+    monkeypatch.setattr(perception, "ocr", lambda *args: [])
+    screen = Screen(image=image, scale=1.0, app="Google Chrome", field=None, url=None, pid=7)
+    items = perception.perceive(screen, 255, "goal")
+    assert [it.text for it in items] == ["Title"]
+    assert screen.offscreen == [hidden]

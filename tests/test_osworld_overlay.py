@@ -21,6 +21,8 @@ SCRIPT = REPO / "scripts" / "osworld"
 OVERLAY = REPO / "osworld_overlay"
 AGENT = OVERLAY / "mm_agents" / "jev_agent.py"
 RUNNER = OVERLAY / "scripts" / "python" / "run_multienv_jev.py"
+LUNA_AGENT = OVERLAY / "mm_agents" / "luna_agent.py"
+LUNA_RUNNER = OVERLAY / "scripts" / "python" / "run_multienv_luna.py"
 POPEN = subprocess.Popen  # the real one, before tests/conftest.py refuses it for every test
 
 
@@ -40,8 +42,8 @@ def pinned_commit() -> str:
     return match.group(1)
 
 
-def test_both_overlay_files_parse():
-    for path in (AGENT, RUNNER):
+def test_every_overlay_file_parses():
+    for path in (AGENT, RUNNER, LUNA_AGENT, LUNA_RUNNER):
         tree(path)
 
 
@@ -98,10 +100,46 @@ def test_the_runner_reads_the_aws_image_map_only_for_aws():
     assert guards, "the AWS image map is read only under `if args.provider_name == 'aws'`"
 
 
-def test_the_runner_names_the_commit_setup_checks_out():
-    header = RUNNER.read_text(encoding="utf-8").split("from __future__", 1)[0]
-    assert "scripts/python/run_multienv.py" in header
-    assert pinned_commit() in header, "re-copy the runner from the commit scripts/osworld pins"
+@pytest.mark.parametrize("runner", [RUNNER, LUNA_RUNNER], ids=["jev", "luna"])
+def test_the_runners_leave_the_proxy_off(runner):
+    """OSWorld's proxy needs credentials of its own, and without them no page of a "proxy": true task
+    loads; both agents run with it off, so their results compare."""
+    envs = calls(tree(runner), "DesktopEnv")
+    assert envs, f"{runner.name} builds no DesktopEnv"
+    for env in envs:
+        proxy = {k.arg: ast.unparse(k.value) for k in env.keywords}.get("enable_proxy")
+        assert proxy == "False", f"DesktopEnv(enable_proxy={proxy}) in {runner.name}"
+
+
+@pytest.mark.parametrize(
+    ("runner", "upstream"),
+    [(RUNNER, "scripts/python/run_multienv.py"), (LUNA_RUNNER, "scripts/python/run_multienv_gpt_response_api.py")],
+    ids=["jev", "luna"],
+)
+def test_the_runners_name_the_commit_setup_checks_out(runner, upstream):
+    header = runner.read_text(encoding="utf-8").split('"""', 1)[0].split("from __future__", 1)[0]
+    assert upstream in header
+    assert pinned_commit() in header, f"re-copy {runner.name} from the commit scripts/osworld pins"
+
+
+def test_the_luna_runner_builds_the_metered_agent_and_writes_each_tasks_usage():
+    module = tree(LUNA_RUNNER)
+    assert calls(module, "MeteredGPTResponseAPIAgent"), "the Luna runner builds the metered agent"
+    assert not calls(module, "GPTResponseAPIAgent"), "and never OSWorld's own, which counts nothing"
+    (write,) = calls(module, "write_usage")
+    assert [ast.unparse(arg) for arg in write.args] == ["example_result_dir"]
+    finals = [
+        node for node in ast.walk(module) if isinstance(node, ast.Try) and write in ast.walk(ast.Module(node.finalbody, []))
+    ]
+    assert finals, "usage.json is written in a finally, so a task that raised still records what it spent"
+
+
+def test_the_luna_agent_only_adds_a_meter():
+    """How the agent acts is OSWorld's: the subclass overrides nothing but the request, to count it."""
+    (cls,) = [node for node in ast.walk(tree(LUNA_AGENT)) if isinstance(node, ast.ClassDef)]
+    assert [ast.unparse(base) for base in cls.bases] == ["GPTResponseAPIAgent"]
+    methods = {node.name for node in cls.body if isinstance(node, ast.FunctionDef)}
+    assert methods == {"__init__", "_new_meter", "reset", "_create_response", "write_usage"}
 
 
 def test_the_script_parses(processes):
@@ -130,7 +168,7 @@ def script(tmp_path: Path, processes):
 def test_no_command_prints_the_usage(script):
     result = script()
     assert result.returncode == 2
-    assert "run-jev DOMAIN/ID --ocr OCR" in result.stdout
+    assert "run-jev TASK... --ocr OCR" in result.stdout
 
 
 def test_run_jev_refuses_to_start_without_ocr(script):

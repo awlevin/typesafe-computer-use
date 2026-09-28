@@ -28,6 +28,8 @@ TILE_PX = 256.0  # tile side in capture pixels
 TILE_DIFF = 6.0  # mean absolute 8-bit difference that counts a tile as changed
 REOCR_FRACTION = 0.6  # above this share of changed tiles, reading the whole region is cheaper
 MAX_REOCR_RECTS = 4  # past this, the per-call overhead outweighs the pixels another rectangle saves
+BLANK_INSET_PX = 4  # how far in from a control's edge its inside is read, past a neighbour's border
+BLANK_RANGE = 12  # 8-bit gray spread at or below which a patch is one flat color
 
 
 def capture(
@@ -96,6 +98,10 @@ def perceive(
         blocks = ocr(screen, budget, goal, cache, timing)
     with phase(timing, "ax"):
         nodes, hidden = ax_nodes(screen, budget)
+        gray = screen.image.convert("L")
+        blank = [node for node in nodes if not drawn(gray, node, screen.scale)]
+        nodes = [node for node in nodes if node not in blank]
+        hidden = hidden + blank
         controls = to_ax_items(nodes, screen.scale)
     merged = merge_with_origins(blocks, controls, budget)
     screen.ax_refs.clear()
@@ -443,6 +449,36 @@ def ax_nodes(screen: Screen, budget: int) -> tuple[list[AxNode], list[AxNode]]:
     except Exception:
         return [], []
     return [node for node in nodes[:budget] if node.label], [node for node in hidden if node.label]
+
+
+def drawn(image: Image.Image, node: AxNode, scale: float) -> bool:
+    """Whether the capture shows anything where the control says it is.
+
+    A page can hide an element with CSS clipping and still report it to accessibility as showing:
+    Chosen, a common dropdown widget, keeps its search box in a clipped panel under the closed
+    control, so a click on it lands on empty page. Such a box is one flat color inside, and has no
+    border down either side. An empty field has its border, and a control with a label or icon has
+    ink inside, so both count as drawn. Every part is read a few pixels in from the top and bottom
+    edges, since a neighbour's border can reach over them, and the inside a few pixels in from the
+    sides as well.
+    """
+    x1, y1 = max(0, round(node.x * scale)), max(0, round(node.y * scale))
+    x2, y2 = min(image.width, round((node.x + node.w) * scale)), min(image.height, round((node.y + node.h) * scale))
+    if x2 - x1 < 2 or y2 - y1 < 2:
+        return True  # nothing to judge: too small, or off the capture, which is not this check's call
+    inset_x, inset_y = min(BLANK_INSET_PX, (x2 - x1) // 4), min(BLANK_INSET_PX, (y2 - y1) // 4)
+    gray = image if image.mode == "L" else image.convert("L")  # perceive converts once for every control
+    parts = [
+        (x1 + inset_x, y1 + inset_y, x2 - inset_x, y2 - inset_y),  # the inside
+        (x1, y1 + inset_y, x1 + inset_x, y2 - inset_y),  # the left side
+        (x2 - inset_x, y1 + inset_y, x2, y2 - inset_y),  # the right side
+    ]
+    return any(_ink(gray.crop(part)) for part in parts if part[2] > part[0] and part[3] > part[1])
+
+
+def _ink(patch: Image.Image) -> bool:
+    low, high = patch.getextrema()
+    return high - low > BLANK_RANGE
 
 
 def offscreen_controls(nodes: list[AxNode], items: list[Item]) -> list[AxNode]:

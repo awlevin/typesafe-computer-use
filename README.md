@@ -18,7 +18,8 @@ needs free text or the classifier has stopped and the screen needs reading.
 
 One idea runs through it: the classifier picks, code decides facts, and the writer only writes
 free text. Anything a model would have to work out (a date, whether a field is focused, whether
-a URL is clean) is computed in code and handed over as state.
+a URL is clean) is computed in code and handed over as state. [VISION.md](VISION.md) says what
+it is for in a dozen lines.
 
 ```
 clicker "go to techcrunch and take me to the checkout page for the cheapest tickets to their next upcoming event" --act

@@ -97,6 +97,9 @@ class OSWorldDesktop:
     def check_abort(self) -> None:
         """No corner to slam: OSWorld's own step budget and `reset` stop a run."""
 
+    def abort_hint(self) -> str:
+        return "OSWorld's step limit, or Ctrl-C on its runner"
+
     def sleep_watching(self, seconds: float) -> None:
         if seconds > 0:
             self._do("WAIT")
