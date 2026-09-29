@@ -6,6 +6,8 @@ set filtering, change detection and the step loop are all testable in CI.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from typesafe_computer_use.browser import act
@@ -61,7 +63,10 @@ class StubSession:
     def evaluate(self, expression, **kwargs):
         assert expression is INTERACTIVE_JS or isinstance(expression, str)
         self.evaluates += 1
-        return self.results.pop(0) if self.results else None
+        result = self.results.pop(0) if self.results else None
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     def call(self, method, params=None):
         self.calls.append((method, params))
@@ -97,6 +102,22 @@ def test_element_label_carries_the_context_that_matters():
 
 def test_perceive_handles_active_element_absent():
     assert perceive(StubSession([None])).items == []
+
+
+def test_perceive_retries_while_a_navigation_swaps_the_document(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    swapping = CDPError("JS error: TypeError: Cannot read properties of null (reading 'scrollTop')")
+    session = StubSession([swapping, swapping, page_dict(items=[element_dict(0)])])
+    assert [e.name for e in perceive(session).items] == ["Sign in"]
+    assert session.evaluates == 3
+
+
+def test_perceive_raises_when_the_page_never_settles(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    session = StubSession([CDPError("JS error: boom")] * 5)
+    with pytest.raises(CDPError, match="boom"):
+        perceive(session)
+    assert session.evaluates == 5
 
 
 # ------------------------------------------------------- action availability
