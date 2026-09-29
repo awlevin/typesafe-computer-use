@@ -33,6 +33,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from .cdp import CDPError
+
 INTERACTIVE_JS = r"""
 (() => {
   document.querySelectorAll("[data-tscu]").forEach(el => el.removeAttribute("data-tscu"));
@@ -235,11 +237,23 @@ class Page:
         return self.field_count > 0
 
 
+def _evaluate_settled(session: Any, tries: int = 5) -> dict:
+    """The perception script, retried while a navigation swaps the document out from under it."""
+    for attempt in range(tries):
+        try:
+            return session.evaluate(INTERACTIVE_JS) or {}
+        except CDPError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(0.1)
+    return {}
+
+
 def perceive(session: Any, *, budget: int = 120, text_budget: int = 120) -> Page:
     """One CDP round trip -> an ordered, labelled element list, plus the page's visible
     text as evidence blocks. No pixels."""
     start = time.perf_counter()
-    data = session.evaluate(INTERACTIVE_JS) or {}
+    data = _evaluate_settled(session)
     elapsed = (time.perf_counter() - start) * 1000
     items = [
         Element(
