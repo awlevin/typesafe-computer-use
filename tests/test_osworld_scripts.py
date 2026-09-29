@@ -188,6 +188,20 @@ def test_a_run_reads_as_changed_for_new_code_but_not_for_the_rows_of_earlier_run
     assert changed["git_dirty"] is True and re.fullmatch(r"[0-9a-f]{64}", changed["git_diff_sha256"])
 
 
+def test_every_row_says_how_long_osworld_waited_after_each_action(tmp_path):
+    """Runs up to 2026-09-29 waited 2 s after each action, later ones none: the rows keep them apart."""
+    script = tmp_path / "scripts" / "osworld"
+    script.parent.mkdir()
+    shutil.copy(OSWORLD, script)
+    for args in (["init", "-q"], ["add", "."], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "s"]):
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "commit.gpgsign=false", *args], capture_output=True, check=True)
+    assert isinstance(provenance(tmp_path)["sleep_after_execution"], int | float), "the wait scripts/osworld sets"
+    script.write_text("MAX_STEPS=50\nSLEEP_AFTER_EXECUTION=2.0\n")
+    assert provenance(tmp_path)["sleep_after_execution"] == 2.0
+    script.write_text("SLEEP_AFTER_EXECUTION=${OSWORLD_WAIT:-2}\n")
+    assert provenance(tmp_path)["sleep_after_execution"] is None, "a value it cannot read is not a guess"
+
+
 def test_attach_follows_the_newest_run_and_cancel_stops_its_whole_session(tmp_path):
     assert "tail -n +1 -F --pid=4242 /opt/typesafe-computer-use/.osworld/runs/20260101T000000Z.log" in dry_run(
         tmp_path / "a", "attach"

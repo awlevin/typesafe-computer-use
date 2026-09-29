@@ -320,20 +320,22 @@ run_task() {
 }
 
 # The git state a run's rows carry, as JSON: the commit, whether the synced copy differed from it,
-# and a hash of that difference, plus OSWorld's pinned commit, the command, and the machine. The
-# folders a sync never carries, and git does not ignore, are left out of both, so an earlier run's
-# rows, not yet committed, do not make the next run's code read as changed.
+# and a hash of that difference, plus OSWorld's pinned commit, the wait after each action that
+# scripts/osworld gives both agents, the command, and the machine. The folders a sync never
+# carries, and git does not ignore, are left out of both, so an earlier run's rows, not yet
+# committed, do not make the next run's code read as changed.
 UNSYNCED=(':!.agents' ':!.claude' ':!.private' ':!benchmarks/osworld')
 provenance() {
-  local name=$1 command=$2 commit dirty=false diff_hash=null osworld
+  local name=$1 command=$2 commit dirty=false diff_hash=null osworld wait
   commit=$(git rev-parse HEAD 2>/dev/null || echo unknown)
   if [[ -n $(git status --porcelain -- . "${UNSYNCED[@]}" 2>/dev/null) ]]; then
     dirty=true
     diff_hash="\"$(diff_digest)\""
   fi
   osworld=$(sed -n 's/^OSWORLD_COMMIT=//p' scripts/osworld 2>/dev/null || true)
-  printf '{"run": "%s", "git_commit": "%s", "git_dirty": %s, "git_diff_sha256": %s, "osworld_commit": "%s", "command": "%s", "machine": "%s"}' \
-    "$name" "$commit" "$dirty" "$diff_hash" "$osworld" "$command" "$INSTANCE"
+  wait=$(sed -n -E 's/^SLEEP_AFTER_EXECUTION=((0|[1-9][0-9]*)(\.[0-9]+)?)$/\1/p' scripts/osworld 2>/dev/null || true)
+  printf '{"run": "%s", "git_commit": "%s", "git_dirty": %s, "git_diff_sha256": %s, "osworld_commit": "%s", "sleep_after_execution": %s, "command": "%s", "machine": "%s"}' \
+    "$name" "$commit" "$dirty" "$diff_hash" "$osworld" "${wait:-null}" "$command" "$INSTANCE"
 }
 
 # A hash of what the synced copy adds to its commit: the diff, and the new files' contents.

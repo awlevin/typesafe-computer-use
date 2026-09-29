@@ -5,15 +5,17 @@ strings, or `WAIT` / `DONE` / `FAIL`. jev's loop reads the screen and acts whene
 adapter joins the two at the step boundary:
 
 - Every input (click, key, typing, scroll) adds its pyautogui code to the step's code, as lines of
-  its own. OSWorld runs each action in the list as a step of its own, with a 2 s pause and an
-  observation after it, and hands the agent only the last observation; so the inputs between two
-  reads (empty a field, type, press Return) go out as one action.
+  its own. OSWorld runs each action in the list as a step of its own, with its fixed pause
+  (`sleep_after_execution`) and an observation after it, and hands the agent only the last
+  observation; so the inputs between two reads (empty a field, type, press Return) go out as one
+  action.
 - The first read of the screen after an input ends the step: the actions go to `next_obs`, which
   hands them to OSWorld and returns the observation taken after they ran. Reads before any input
   use the observation in hand.
-- A wait appends `WAIT`, an action of its own, which OSWorld sleeps in the VM. It never sleeps
-  here: time has to pass where the page is loading. A pause between two inputs of one step, such
-  as closing a popup and clicking what it covered, is a `time.sleep` in their code instead.
+- A wait appends `WAIT`, an action of its own, which OSWorld sleeps for its fixed pause: no time
+  at all while that pause is 0. It never sleeps here: time has to pass where the page is loading. A
+  pause between two inputs of one step, such as closing a popup and clicking what it covered, is a
+  `time.sleep` in their code instead.
 
 The screenshot is the capture at scale 1.0, so a click lands on the capture's own pixels. The app,
 window, focused field, URL, and controls come from the accessibility tree, and are simply unknown
