@@ -127,8 +127,21 @@ def osascript(script: str) -> str:
     return subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=True).stdout.strip()
 
 
+def _resolve_web_app_name(name: str) -> str:
+    """Every Safari web app ("Add to Dock") runs as a process literally named "Web App";
+    its own name only shows up as the "displayed name". Without this, `activate("YouTube")`
+    never matches and every web app looks the same when reported as the frontmost app.
+    """
+    if name != "Web App":
+        return name
+    return osascript(
+        'tell application "System Events" to get displayed name of first application process whose frontmost is true'
+    )
+
+
 def frontmost_app() -> str:
-    return osascript('tell application "System Events" to get name of first application process whose frontmost is true')
+    name = osascript('tell application "System Events" to get name of first application process whose frontmost is true')
+    return _resolve_web_app_name(name)
 
 
 def frontmost_app_and_pid() -> tuple[str, int]:
@@ -136,7 +149,7 @@ def frontmost_app_and_pid() -> tuple[str, int]:
     name, _, pid = osascript(
         'tell application "System Events" to tell (first application process whose frontmost is true) to get {name, unix id}'
     ).rpartition(", ")
-    return name, int(pid)
+    return _resolve_web_app_name(name), int(pid)
 
 
 def frontmost_pid() -> int:
