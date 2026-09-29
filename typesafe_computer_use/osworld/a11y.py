@@ -174,6 +174,19 @@ def active_app(root: ET.Element | None) -> ET.Element | None:
     return None
 
 
+def window_title(root: ET.Element | None) -> str | None:
+    """The title of the window in front, the name of the frame the active application draws.
+
+    Chrome draws a menu, a bubble, or a dialog as a window of its own, which may be the active one,
+    but none is a window with a title: the frame behind it is.
+    """
+    window = active_window(root)
+    if window is not None and window.tag == "frame" and name(window):
+        return name(window)
+    app = active_app(root)
+    return next((name(w) for w in _windows(app) if w.tag == "frame" and name(w)), None) if app is not None else None
+
+
 def focused_field(root: ET.Element | None) -> Field | None:
     """The focused element of the active window, or, when no window is active, of the application
     holding the focus. The whole tree is no scope: GNOME Shell's window is focused in every tree.

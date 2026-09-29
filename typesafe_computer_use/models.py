@@ -151,7 +151,8 @@ class AxNode:
 
     `ref` is the element itself, the handle an action is sent to. It is opaque here and
     stays out of equality and repr so a node compares as the facts it reports. `covered_by` is the
-    popup in front of it, when a click on its center would land on that popup instead.
+    popup in front of it, when a click on its center would land on that popup instead, and `within`
+    the popup it is part of, when it is in one.
     """
 
     role: str
@@ -163,6 +164,7 @@ class AxNode:
     pressable: bool
     ref: object | None = field(default=None, compare=False, repr=False)
     covered_by: Popup | None = None
+    within: Popup | None = None
 
     @property
     def role_word(self) -> str:
@@ -175,7 +177,8 @@ class Popup:
 
     A click on the page under it lands on it instead, so what it covers is reached by closing it
     first. `close` is its own close button, when it has one, and never any of its other buttons:
-    the other button on Chrome's "Restore pages?" bubble restores the last session's tabs.
+    the other button on Chrome's "Restore pages?" bubble restores the last session's tabs. `role`
+    says what kind of popup it is (alert, dialog, menu), and is empty when the tree does not say.
     """
 
     name: str
@@ -184,6 +187,7 @@ class Popup:
     w: float
     h: float
     close: AxNode | None = None
+    role: str = ""
 
     @property
     def title(self) -> str:
@@ -239,9 +243,11 @@ class Screen:
     url: str | None
     pid: int | None = None  # frontmost process, for the accessibility walk; None in replay
     window: tuple[float, float, float, float] | None = None  # frontmost window, x/y/w/h in points; None in replay
+    title: str | None = None  # that window's title; None when unknown, as in replay
     ax_refs: dict[int, object] = field(default_factory=dict)  # item index -> accessibility element, when it has one
     offscreen: list[AxNode] = field(default_factory=list)  # labelled controls the app exposes but does not show
     covered: dict[int, Popup] = field(default_factory=dict)  # item index -> the popup a click on it would land on
+    popups: dict[Popup, list[str]] = field(default_factory=dict)  # each popup the tree shows -> its controls' labels
 
     @property
     def size_pt(self) -> tuple[float, float]:

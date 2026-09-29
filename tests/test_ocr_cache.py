@@ -420,6 +420,7 @@ def test_capture_starts_the_read_before_it_asks_which_app_and_window_it_shows(mo
     monkeypatch.setattr(desktop, "display_scale", lambda image: 2.0)
     monkeypatch.setattr(desktop, "frontmost_app_and_pid", lambda: events.append("app") or ("Google Chrome", 7))
     monkeypatch.setattr(desktop, "frontmost_window_bounds", lambda pid: (0.0, 0.0, 1024.0, 512.0))
+    monkeypatch.setattr(desktop, "frontmost_window_title", lambda pid: "Google - Google Chrome")
     monkeypatch.setattr(desktop, "focused_field", lambda: None)
     monkeypatch.setattr(desktop, "browser_url", lambda browser: None)
     perception.capture(browser="Google Chrome", ahead=cache)

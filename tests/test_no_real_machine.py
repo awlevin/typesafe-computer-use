@@ -23,6 +23,7 @@ from typesafe_computer_use.browser.cdp import Chrome, Session
         lambda: macos.open_url("Google Chrome", "https://example.com"),
         lambda: macos.activate("Finder"),
         lambda: macos.screenshot(),
+        lambda: macos.frontmost_window_title(7),
     ],
 )
 def test_an_unpatched_call_refuses_instead_of_reaching_the_machine(touch):
@@ -48,6 +49,7 @@ def test_the_pointer_reads_as_mid_screen_so_no_test_aborts_by_chance():
         lambda: windows.activate("notepad.exe"),
         lambda: windows.open_path(Path("state.txt")),
         lambda: windows.screenshot(),
+        lambda: windows.frontmost_window_title(7),
         lambda: windows.ax_press(object()),
         lambda: windows.ax_focus(object()),
         lambda: windows.ax_set_value(object(), "hi"),

@@ -25,6 +25,7 @@ from typesafe_sdk import Noul
 from typesafe_computer_use import actions, runner
 from typesafe_computer_use.actions import Context
 from typesafe_computer_use.models import AxNode, Field, Item, Popup, Screen
+from typesafe_computer_use.outcome import ARROW
 from typesafe_computer_use.platform_adapter import desktop
 from typesafe_computer_use.runner import RunConfig, RunState, run
 
@@ -114,6 +115,8 @@ class Page:
     no_ax_value: bool = False  # the field refuses to have its value set, so text has to be typed in
     covered_by: str | None = None  # an overlay eating every mouse click: the text of what is really hit
     popup: str | None = None  # a window in front of the page, by name; the row reading "Close" is its close button
+    popup_role: str = "dialog"  # what kind of popup it is
+    in_popup: tuple[str, ...] = ()  # the rows that are part of it
     under_popup: tuple[str, ...] = ()  # the page's items under that window, which eats a mouse click on them
     on: dict[str, str | Callable[[World], str | None]] = dataclasses.field(default_factory=dict)
 
@@ -225,19 +228,22 @@ class World:
         return screen
 
     def perceive(self, screen: Screen) -> list[Item]:
-        """The rows as items, filling `screen.ax_refs` for the ones the app declared, and
-        `screen.covered` for the ones under the page's popup.
+        """The rows as items, filling `screen.ax_refs` for the ones the app declared, `screen.covered`
+        for the ones under the page's popup, and `screen.popups` with the popup's own.
 
         A control under a popup is found in the tree but not pressed through it, as in an OSWorld VM:
         a press would reach it through the popup and leave nothing for the loop to get around.
         """
         screen.ax_refs.clear()
         screen.covered.clear()
+        screen.popups.clear()
         items = []
         cells = self.cells()
         popup = self.popup(cells)
         for n, cell in enumerate(cells):
             items.append(Item(n, cell.text, 1.0, *cell.box, role=cell.role, source="ax" if cell.role else "ocr"))
+            if popup is not None and cell.text in self.page.in_popup:
+                screen.popups.setdefault(popup, []).append(cell.text)
             if popup is not None and cell.text in self.page.under_popup:
                 screen.covered[n] = popup
             elif cell.role:
@@ -253,7 +259,7 @@ class World:
         if close is not None:
             x1, y1, x2, y2 = (v / SCALE for v in close.box)
             button = AxNode(role="AXButton", label="Close", x=x1, y=y1, w=x2 - x1, h=y2 - y1, pressable=False)
-        return Popup(self.page.popup, 0.0, 0.0, CAPTURE[0] / SCALE, CAPTURE[1] / SCALE, close=button)
+        return Popup(self.page.popup, 0.0, 0.0, CAPTURE[0] / SCALE, CAPTURE[1] / SCALE, close=button, role=self.page.popup_role)
 
     def focused_field(self) -> Field | None:
         """The page's text field, at the row that carries its label.
@@ -364,6 +370,11 @@ class World:
         # `wait` is the one action that touches no machine call, so the only way the world hears
         # about it is the handler itself. Without this a loading page would never finish loading.
         monkeypatch.setitem(actions._HANDLERS, "wait", lambda decision, screen, items, ctx: (self.apply("wait"), "waited")[1])
+
+
+def acts(state: RunState) -> list[str]:
+    """The run's history lines without what came of each (see `outcome`), for a test of what the loop did."""
+    return [line.split(ARROW)[0] for line in state.history]
 
 
 DEFAULT_CONFIDENCE = 0.9  # comfortably over the runner's 0.4 floor, so a scenario stops for a reason

@@ -13,7 +13,7 @@ from collections import deque
 from collections.abc import Callable, Iterable
 from typing import NamedTuple
 
-from .models import AxNode
+from .models import AxNode, Popup
 
 AX_PRESS = "AXPress"  # sentinel an actions() callable emits when a node accepts a press/invoke
 
@@ -52,6 +52,16 @@ AX_LABEL_PARENT_ROLES = {
 # List containers keep their label in a shallow AXStaticText rather than on themselves.
 AX_LABEL_DESCENDANT_ROLES = {"AXCell", "AXRow"}
 AX_SKIP_SUBTREE_ROLES = {"AXMenu"}  # a closed menu: thousands of zero-sized items, none on screen
+# Roles that make a node a popup, and what a history line calls each. The walk sees AT-SPI's names on
+# an OSWorld VM, where a role with no AX counterpart keeps its own, and macOS's here.
+POPUP_ROLES = {
+    "alert": "alert",
+    "dialog": "dialog",
+    "file-chooser": "dialog",
+    "menu": "menu",
+    "AXSheet": "dialog",
+    "AXPopover": "popover",
+}
 AX_NODE_CAP = 4000
 AX_TIME_CAP = 0.6
 AX_OFFSCREEN_CAP = 120  # off-screen controls collected before the walk stops looking for more
@@ -154,18 +164,22 @@ def walk_actionable(
     not offered as one: its subtree stays pruned from `found`. But AXPress does not need a node to
     be visible, so a labelled one that accepts the action is collected separately, down to
     `offscreen_cap`, after which those subtrees are dropped again and the walk is the old one.
+
+    A control under a node with a popup role (`POPUP_ROLES`) that is on screen is part of that popup,
+    the innermost when they nest, and says so in `within`. One that is not on screen is no popup
+    showing: Chrome keeps a closed dropdown's menu in the tree, with no frame, under its selected option.
     """
     found: list[AxNode] = []
     offscreen: list[AxNode] = []
     deadline = clock() + time_cap
-    queue = deque([(root, "", False, False, None)])
+    queue = deque([(root, "", False, False, None, None)])
     seen = 0
     visited: set = set()  # elements compare by identity across fetches, so a self-listing app is walked once
     visited_keys: set[tuple] = set()  # and a control handed over as several distinct objects is kept once
     while queue:
         if seen >= node_cap or clock() >= deadline:
             return found, offscreen, True
-        node, parent_label, parent_emitted, hidden, parent_key = queue.popleft()
+        node, parent_label, parent_emitted, hidden, parent_key, popup = queue.popleft()
         identity = node_identity(node)
         if identity in visited:
             continue
@@ -185,6 +199,8 @@ def walk_actionable(
         hidden = hidden or off_display(frame, display_w_pt, display_h_pt)
         if hidden and len(offscreen) >= offscreen_cap:
             continue  # nothing left to collect down there, and it never counted on screen
+        if role in POPUP_ROLES and not hidden and clickable(frame):
+            popup = Popup(own_label, *frame, role=POPUP_ROLES[role])
         kids = list(children(node))
         label, inherited = own_label, False
         if not label and role in AX_LABEL_DESCENDANT_ROLES:
@@ -202,11 +218,11 @@ def walk_actionable(
                 pressable = AX_PRESS in actions(node)
                 if pressable or role in AX_ACTIONABLE_ROLES:
                     x, y, w, h = frame
-                    found.append(AxNode(role=role, label=label, x=x, y=y, w=w, h=h, pressable=pressable, ref=node))
+                    found.append(AxNode(role=role, label=label, x=x, y=y, w=w, h=h, pressable=pressable, ref=node, within=popup))
                     emitted = True
             elif frame is not None and len(offscreen) < offscreen_cap and AX_PRESS in actions(node):
                 x, y, w, h = frame
                 offscreen.append(AxNode(role=role, label=label, x=x, y=y, w=w, h=h, pressable=True, ref=node))
         child_label = own_label if role in AX_LABEL_PARENT_ROLES else ""
-        queue.extend((kid, child_label, emitted, hidden, key) for kid in kids)
+        queue.extend((kid, child_label, emitted, hidden, key, popup) for kid in kids)
     return found, offscreen, False

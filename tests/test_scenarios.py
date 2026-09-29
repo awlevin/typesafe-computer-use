@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from world import FakeWriter, Page, World, drive, scripted
+from world import FakeWriter, Page, World, acts, drive, scripted
 
 from typesafe_computer_use.runner import MAX_REPEATS, MAX_STALLS, STOPPED
 
@@ -30,7 +30,7 @@ def test_l1_goal_already_achieved(monkeypatch, tmp_path):
     assert state.outcome == "done"
     assert state.answer is not None and state.answer.achieved
     assert "Order 4821" in state.answer.text
-    assert state.history == []
+    assert acts(state) == []
     assert world.page.name == "confirmation"
     assert world.log == []
 
@@ -48,7 +48,7 @@ def test_l2_one_click_reaches_the_target(monkeypatch, tmp_path):
     )
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Tickets'"]
+    assert acts(state) == ["clicked 'Tickets'"]
     assert world.page.name == "tickets"
     assert world.log == ["click:Tickets"]
     assert world.mouse == [SECOND_ROW]  # an OCR-only item has no element, so the mouse does the work
@@ -72,7 +72,7 @@ def test_l3_accessibility_controls_are_pressed_not_clicked(monkeypatch, tmp_path
     )
 
     assert state.outcome == "done"
-    assert state.history == ["pressed 'Tickets' via accessibility"]
+    assert acts(state) == ["pressed 'Tickets' via accessibility"]
     assert world.page.name == "tickets"
     assert world.log == ["click:Tickets"]
     assert world.mouse == []  # the press went to the control itself, so no pixel was clicked
@@ -98,7 +98,7 @@ def test_l4_a_slow_page_needs_waiting(monkeypatch, tmp_path):
     state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Tickets'", "waited", "clicked 'Buy'"]
+    assert acts(state) == ["clicked 'Tickets'", "waited", "clicked 'Buy'"]
     assert world.page.name == "checkout"
     assert world.log == ["click:Tickets", "wait", "click:Buy"]
     assert world.fake.states[1]["screen_items_in_reading_order"][0]["text"] == "Loading..."
@@ -123,7 +123,7 @@ def test_l5_a_dialog_is_dismissed_with_escape(monkeypatch, tmp_path):
     state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Tickets'", "pressed Escape", "clicked 'Buy'"]
+    assert acts(state) == ["clicked 'Tickets'", "pressed Escape", "clicked 'Buy'"]
     assert world.page.name == "checkout"
     assert world.log == ["click:Tickets", "escape", "click:Buy"]
 
@@ -164,7 +164,7 @@ def test_l6_a_form_is_filled_and_submitted(monkeypatch, tmp_path):
 
     assert state.outcome == "done"
     assert "typed 'bruno mars tour'" in state.history[0]
-    assert state.history[1:] == ["pressed Return", "clicked 'First result'"]
+    assert acts(state)[1:] == ["pressed Return", "clicked 'First result'"]
     assert world.typed["Search"] == "bruno mars tour"
     assert world.page.name == "detail"
     assert world.log == ["type:bruno mars tour", "enter", "click:First result"]
@@ -195,7 +195,7 @@ def test_l7_a_long_page_is_scrolled_three_times(monkeypatch, tmp_path):
     state = drive(world, long_list_policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["scrolled down", "scrolled down", "scrolled down", "clicked 'Buy'"]
+    assert acts(state) == ["scrolled down", "scrolled down", "scrolled down", "clicked 'Buy'"]
     assert world.page.name == "checkout"
     assert world.log == ["scroll_down", "scroll_down", "scroll_down", "click:Buy"]
 
@@ -226,7 +226,7 @@ def test_l8_a_slow_page_needs_three_waits(monkeypatch, tmp_path):
     state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Tickets'", "waited", "waited", "waited", "clicked 'Buy'"]
+    assert acts(state) == ["clicked 'Tickets'", "waited", "waited", "waited", "clicked 'Buy'"]
     assert world.page.name == "checkout"
     assert world.log == ["click:Tickets", "wait", "wait", "wait", "click:Buy"]
     assert world.mouse == [SECOND_ROW, FIRST_ROW]
@@ -250,7 +250,7 @@ def test_l9_a_dead_end_is_undone_with_go_back(monkeypatch, tmp_path):
     state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Blog'", "went back", "clicked 'Tickets'"]
+    assert acts(state) == ["clicked 'Blog'", "went back", "clicked 'Tickets'"]
     assert world.page.name == "tickets"
     assert world.log == ["click:Blog", "back", "click:Tickets"]
 
@@ -272,7 +272,7 @@ def test_l10_a_two_page_cycle_stops_as_stalled(monkeypatch, tmp_path):
 
     assert state.outcome == "stalled"
     assert len(state.history) <= 5  # the cycle is caught by the repeat rule, long before the step limit
-    assert set(state.history) == {"clicked 'Next'", "clicked 'Back'"}
+    assert set(acts(state)) == {"clicked 'Next'", "clicked 'Back'"}
 
 
 def test_l11_a_ticking_clock_does_not_hide_a_stall(monkeypatch, tmp_path):
@@ -297,7 +297,7 @@ def test_l11_a_ticking_clock_does_not_hide_a_stall(monkeypatch, tmp_path):
 
     assert state.outcome == "stalled"
     assert len(state.history) <= 4
-    assert set(state.history) == {"clicked 'Refresh'"}
+    assert set(acts(state)) == {"clicked 'Refresh'"}
     clock = [state["screen_items_in_reading_order"][0]["text"] for state in world.fake.states]
     assert len(set(clock)) == len(clock)  # the clock really did tick between the captures
 
@@ -322,7 +322,7 @@ def test_l12_a_wizard_repeats_next_across_distinct_pages(monkeypatch, tmp_path):
     state = drive(world, wizard_policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Next'"] * 3  # the same action three times, on three different screens
+    assert acts(state) == ["clicked 'Next'"] * 3  # the same action three times, on three different screens
     assert world.page.name == "finished"
     assert world.log == ["click:Next"] * 3
 
@@ -345,7 +345,7 @@ def test_l13_an_offscreen_control_is_pressed(monkeypatch, tmp_path):
     state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["pressed 'Register Now' (off-screen control) via accessibility"]
+    assert acts(state) == ["pressed 'Register Now' (off-screen control) via accessibility"]
     assert world.page.name == "registration"
     assert world.log == ["press:Register Now"]
     assert world.mouse == []  # there is no pixel to click: the control is parked above the viewport
@@ -412,8 +412,8 @@ def test_l15_use_browser_from_another_app_opens_a_catalog_site(monkeypatch, tmp_
     state = drive(world, policy, goal="sign in to github", monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history[0] == "opened https://github.com/"
-    assert state.history == ["opened https://github.com/", "clicked 'Sign in'"]
+    assert acts(state)[0] == "opened https://github.com/"
+    assert acts(state) == ["opened https://github.com/", "clicked 'Sign in'"]
     assert world.page.name == "signin"
     assert world.log == ["open:https://github.com/", "click:Sign in"]
     assert world.fake.states[0]["frontmost_app"] == "Finder"
@@ -431,7 +431,7 @@ def test_l16_a_page_that_never_loads_stops_within_the_idle_budget(monkeypatch, t
     state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "stalled"
-    assert state.history == ["clicked 'Tickets'"] + ["waited"] * 3
+    assert acts(state) == ["clicked 'Tickets'"] + ["waited"] * 3
     assert world.page.name == "tickets"
     assert world.log == ["click:Tickets"] + ["wait"] * 3
 
@@ -447,7 +447,7 @@ def test_l17_low_confidence_stops_the_run(monkeypatch, tmp_path):
     state = drive(world, scripted(("click_item", "Tickets", 0.3)), goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "low confidence"
-    assert state.history == []
+    assert acts(state) == []
     assert world.page.name == "home"
     assert world.log == []
     assert world.mouse == []
@@ -469,7 +469,7 @@ def test_l18_the_step_limit_ends_an_endless_list(monkeypatch, tmp_path):
     state = drive(world, always_scroll_policy, goal=GOAL, steps=3, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "step limit"
-    assert state.history == ["scrolled down"] * 3
+    assert acts(state) == ["scrolled down"] * 3
     assert world.page.name == "list4"
     assert world.log == ["scroll_down"] * 3
 
@@ -520,7 +520,7 @@ def test_l20_a_dead_link_is_steered_around_with_what_was_already_tried(monkeypat
     state = drive(world, steering_policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Sponsors'", "clicked 'Tickets'", "clicked 'Buy'"]
+    assert acts(state) == ["clicked 'Sponsors'", "clicked 'Tickets'", "clicked 'Buy'"]
     assert world.page.name == "checkout"
     assert world.fake.states[0]["already_tried_on_this_screen"] == []
     assert world.fake.states[1]["already_tried_on_this_screen"] == ["clicked 'Sponsors'"]
@@ -590,7 +590,7 @@ def test_l21_a_composite_task_runs_the_whole_pipeline(monkeypatch, tmp_path):
     )
 
     assert state.outcome == "done"
-    assert state.history[:6] == [
+    assert acts(state)[:6] == [
         "opened https://shows.example.com/",
         "pressed Escape",
         "waited",
@@ -598,8 +598,8 @@ def test_l21_a_composite_task_runs_the_whole_pipeline(monkeypatch, tmp_path):
         "scrolled down",
         "pressed 'Search' via accessibility",
     ]
-    assert state.history[6] == "typed 'bruno mars' into 'Search' via accessibility (verified 0.95)"
-    assert state.history[7:] == ["pressed Return", "clicked 'First result'"]
+    assert acts(state)[6] == "typed 'bruno mars' into 'Search' via accessibility (verified 0.95)"
+    assert acts(state)[7:] == ["pressed Return", "clicked 'First result'"]
     assert world.page.name == "detail"
     assert world.log == [
         "open:https://shows.example.com/",
@@ -653,7 +653,7 @@ def test_l22_a_hub_of_dead_links_is_searched_beyond_the_history_window(monkeypat
 
     assert state.outcome == "done"
     assert len(state.history) == 19  # nine dead links, nine ways back, and the tenth link
-    assert state.history[-1] == "clicked 'Link J'"
+    assert acts(state)[-1] == "clicked 'Link J'"
     assert world.page.name == "target"
     last_hub = world.fake.states[18]  # the hub as it looked the step Link J was clicked
     assert len(last_hub["previous_actions"]) == 8
@@ -691,7 +691,7 @@ def test_l23_a_modal_escape_cannot_close_is_closed_by_its_button(monkeypatch, tm
     state = drive(world, modal_policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Tickets'", "pressed Escape", "clicked 'Close'", "clicked 'Buy'"]
+    assert acts(state) == ["clicked 'Tickets'", "pressed Escape", "clicked 'Close'", "clicked 'Buy'"]
     assert world.page.name == "checkout"
     assert world.log == ["click:Tickets", "escape", "click:Close", "click:Buy"]
 
@@ -714,7 +714,7 @@ def test_l24_type_email_fills_the_focused_email_field(monkeypatch, tmp_path):
     state = drive(world, policy, goal="sign in", monkeypatch=monkeypatch, tmp_path=tmp_path, email="user@example.com")
 
     assert state.outcome == "done"
-    assert state.history == ["typed email via accessibility"]
+    assert acts(state) == ["typed email via accessibility"]
     assert world.typed["Email"] == "user@example.com"
     assert world.log == ["type:user@example.com"]
     assert "type_email" in world.fake.asked[0]["kind"].criteria  # the action is only offered when an email is known
@@ -749,7 +749,7 @@ def test_l26_a_refused_action_then_a_good_one_does_not_stall(monkeypatch, tmp_pa
     state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["type_text refused: no text field is focused", "clicked 'Tickets'"]
+    assert acts(state) == ["type_text refused: no text field is focused", "clicked 'Tickets'"]
     assert world.page.name == "tickets"
     assert world.log == ["click:Tickets"]  # the refusal never reached the machine
 
@@ -768,7 +768,7 @@ def test_l27_scrolling_past_the_end_stops_as_a_repeated_action(monkeypatch, tmp_
     assert state.outcome == "stalled"
     # One scroll that moved, then three at the bottom: the last of those is the second scroll
     # already taken on this screen, so the repeat rule ends it.
-    assert state.history == ["scrolled down"] * 4
+    assert acts(state) == ["scrolled down"] * 4
     assert world.page.name == "list2"
 
 
@@ -864,7 +864,7 @@ def test_l30_focus_stolen_by_another_app_is_taken_back_with_use_browser(monkeypa
     state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Buy'", "activated Google Chrome"]
+    assert acts(state) == ["clicked 'Buy'", "activated Google Chrome"]
     assert world.page.name == "checkout"
     assert world.log == ["click:Buy", "activate"]
 
@@ -894,8 +894,8 @@ def test_l31_an_unusable_writer_url_is_refused_and_the_catalog_is_used_instead(m
     )
 
     assert state.outcome == "done"
-    assert state.history[0] == "use_browser refused: the writer proposed no usable URL for this goal"
-    assert state.history[1] == "opened https://github.com/"
+    assert acts(state)[0] == "use_browser refused: the writer proposed no usable URL for this goal"
+    assert acts(state)[1] == "opened https://github.com/"
     assert world.page.name == "github"
     assert world.log == ["open:https://github.com/"]
     assert not any("insecure.example.com" in action for action in world.log)
@@ -913,7 +913,7 @@ def test_l32_a_feed_that_grows_every_step_is_not_mistaken_for_a_stall(monkeypatc
     state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Load more'"] * 5  # every capture showed a longer page, so nothing stalled
+    assert acts(state) == ["clicked 'Load more'"] * 5  # every capture showed a longer page, so nothing stalled
     assert len(world.fake.states[-1]["screen_items_in_reading_order"]) > len(
         world.fake.states[0]["screen_items_in_reading_order"]
     )
@@ -928,7 +928,7 @@ def test_l32b_a_feed_that_never_grows_is_a_stall(monkeypatch, tmp_path):
     assert state.outcome == "stalled"
     # Three clicks either way: the repeat rule fires on the third, and with it gone the idle rule
     # would stop step 4 before it acted. The two rules agree here; L10 and L16 tell them apart.
-    assert state.history == ["clicked 'Load more'"] * 3
+    assert acts(state) == ["clicked 'Load more'"] * 3
 
 
 def coldplay_policy(state: dict, questions: dict) -> tuple:
@@ -965,7 +965,7 @@ def test_l33_duplicate_labels_are_told_apart_by_their_row(monkeypatch, tmp_path)
     state = drive(world, coldplay_policy, goal="buy a ticket to Coldplay", monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == [
+    assert acts(state) == [
         "clicked 'Buy' beside 'Coldplay', 'Oct 2'"
     ]  # the line says which Buy, so trying one does not mark them all
     assert world.page.name == "coldplay_checkout"
@@ -1003,7 +1003,7 @@ def test_l34_a_banner_covering_the_page_takes_the_first_click(monkeypatch, tmp_p
     state = drive(world, banner_policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Buy'", "clicked 'Buy'"]  # the loop aimed at Buy twice
+    assert acts(state) == ["clicked 'Buy'", "clicked 'Buy'"]  # the loop aimed at Buy twice
     assert world.log == ["click:Accept cookies", "click:Buy"]  # the banner took the first one
     assert world.page.name == "checkout"
 
@@ -1055,7 +1055,7 @@ def test_l35_a_small_site_is_searched_exhaustively_for_the_one_page_that_sells(m
 
     assert state.outcome == "done"
     assert world.page.name == "checkout"
-    assert state.history == [
+    assert acts(state) == [
         "clicked 'About'",
         "went back",
         "clicked 'Contact'",
@@ -1181,7 +1181,7 @@ def test_l36_a_long_run_mixes_everything(monkeypatch, tmp_path):
 
     assert state.outcome == "done"
     assert world.page.name == "checkout"
-    assert state.history == [
+    assert acts(state) == [
         "opened https://shows.example.com/",
         "clicked 'Buy'",
         "waited",
@@ -1246,7 +1246,7 @@ def test_l37_a_small_modal_on_a_dense_page_is_not_mistaken_for_no_change(monkeyp
     state = drive(world, modal_listing_policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["clicked 'Buy'", "clicked 'Close'", "clicked 'Buy'"]
+    assert acts(state) == ["clicked 'Buy'", "clicked 'Close'", "clicked 'Buy'"]
     assert world.page.name == "checkout"
     assert world.log == ["click:Buy", "click:Close", "click:Buy"]
     # Step 2 captured the modal and step 3 the page behind it again. Two lines over forty is well
@@ -1277,7 +1277,7 @@ def test_l38_two_tickers_on_a_dense_page_let_a_futile_run_reach_the_step_limit(m
     state = drive(world, refresh_policy, goal=GOAL, steps=6, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "step limit"
-    assert state.history == ["clicked 'Refresh'"] * 6
+    assert acts(state) == ["clicked 'Refresh'"] * 6
     assert world.log == ["click:Refresh"] * 6
 
 
@@ -1333,7 +1333,7 @@ def test_l39_the_wrong_buy_is_undone_and_the_right_one_is_not_marked_as_tried(mo
     state = drive(world, picky_buy_policy, goal="buy a ticket to Coldplay", monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == [
+    assert acts(state) == [
         "clicked 'Buy' beside 'Bruno Mars', 'Sep 25'",
         "went back",
         "clicked 'Buy' beside 'Coldplay', 'Oct 2'",
@@ -1375,7 +1375,7 @@ def test_l40_a_legitimate_repeat_that_leaves_the_visible_text_unchanged_is_taken
     state = drive(world, note_policy, goal="create three new notes", monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done"
-    assert state.history == ["pressed 'New note' via accessibility"] * 3
+    assert acts(state) == ["pressed 'New note' via accessibility"] * 3
     assert world.notes == 3
 
 
@@ -1412,7 +1412,7 @@ def test_l41_a_single_page_search_changes_results_not_the_url(monkeypatch, tmp_p
 
     assert state.outcome == "done"
     assert world.page.name == "checkout"
-    assert state.history == [
+    assert acts(state) == [
         "typed 'bruno mars' into 'Search' via accessibility (verified 0.95)",
         "pressed Return",
         "clicked 'Buy'",
@@ -1807,7 +1807,7 @@ def test_l56_a_name_the_writer_submits_is_typed_and_saved_in_one_step(monkeypatc
     )
 
     assert state.outcome == "done" and world.page.name == "saved"
-    assert state.history == ["typed 'Favorites' into 'Name' via accessibility and pressed Return"]
+    assert acts(state) == ["typed 'Favorites' into 'Name' via accessibility and pressed Return"]
     assert world.log == ["type:Favorites", "enter"]
     assert state.calls.count == {"classifier": 2, "writer": 2}  # two decisions and no check; the name and the answer
 
@@ -1825,11 +1825,20 @@ def test_l57_an_item_under_a_popup_is_reached_by_closing_the_popup_in_the_same_s
                 items=["Bookmarks", ("Organise", "button"), "Restore pages?", ("Close", "button"), ("Restore", "button")],
                 url=manager,
                 popup="Restore pages?",
+                popup_role="alert",
+                in_popup=("Restore pages?", "Close", "Restore"),
                 under_popup=("Organise",),
                 on={"click:Close": "manager", "click:Restore": "restored"},
             ),
             Page(name="manager", items=["Bookmarks", ("Organise", "button")], url=manager, on={"click:Organise": "menu"}),
-            Page(name="menu", items=["Bookmarks", "Add new bookmark", "Add new folder"], url=manager),
+            Page(
+                name="menu",
+                items=["Bookmarks", ("Add new bookmark", "button"), ("Add new folder", "button")],
+                url=manager,
+                popup="",
+                popup_role="menu",
+                in_popup=("Add new bookmark", "Add new folder"),
+            ),
             Page(name="restored", items=["Yesterday's tabs"], url="https://example.com/"),
         ]
     )
@@ -1841,9 +1850,60 @@ def test_l57_an_item_under_a_popup_is_reached_by_closing_the_popup_in_the_same_s
     state = drive(world, policy, goal="make a new folder on the bookmarks bar", monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "done" and world.page.name == "menu"
-    assert state.history == ["closed 'Restore pages?' then clicked 'Organise'"]
+    assert state.history == [
+        "closed 'Restore pages?' then clicked 'Organise' → opened: menu ('Add new bookmark', 'Add new folder')"
+    ]
     assert world.log == ["click:Close", "click:Organise"]
     (organise,) = [it for it in world.fake.states[0]["screen_items_in_reading_order"] if it["text"] == "Organise"]
     assert organise["under"] == "'Restore pages?'"
     assert "under 'Restore pages?'" in world.fake.asked[0]["item"].criteria[str(organise["i"])]
     assert state.calls.count["classifier"] == 2  # one decision to open the menu, one to stop
+
+
+def test_l58_a_click_the_popup_took_says_so_and_the_next_decision_reads_it(monkeypatch, tmp_path):
+    """OSWorld's chrome/2ad9387a, where nothing said which control a popup covered: the click meant for
+    Organise only closed the "Restore pages?" bubble over it. Its history line now says so, and the
+    next decision and the answer read that line, where they read only "clicked 'Organise'" before."""
+    manager = "chrome://bookmarks/"
+    world = World(
+        [
+            Page(
+                name="bubble",
+                items=["Bookmarks", "Organise", "Restore pages?", "Close", "Restore"],
+                url=manager,
+                popup="Restore pages?",
+                popup_role="alert",
+                in_popup=("Restore pages?", "Close", "Restore"),
+                covered_by="Restore pages?",  # the bubble takes the click, and closes
+                on={"click:Restore pages?": "manager"},
+            ),
+            Page(name="manager", items=["Bookmarks", "Organise"], url=manager, on={"click:Organise": "menu"}),
+            Page(
+                name="menu",
+                items=["Bookmarks", "Organise", "Add new bookmark", "Add new folder"],
+                url=manager,
+                popup="",
+                popup_role="menu",
+                in_popup=("Add new bookmark", "Add new folder"),
+            ),
+        ]
+    )
+
+    def policy(state: dict, questions: dict) -> tuple:
+        texts = [it["text"] for it in state["screen_items_in_reading_order"]]
+        return ("done", None) if "Add new folder" in texts else ("click_item", "Organise")
+
+    writer = FakeWriter()
+    state = drive(
+        world, policy, goal="make a new folder on the bookmarks bar", monkeypatch=monkeypatch, tmp_path=tmp_path, writer=writer
+    )
+
+    assert state.outcome == "done" and world.page.name == "menu"
+    assert world.log == ["click:Restore pages?", "click:Organise"]
+    assert state.history == [
+        "clicked 'Organise' → closed: alert 'Restore pages?'",
+        "clicked 'Organise' → opened: menu ('Add new bookmark', 'Add new folder')",
+    ]
+    assert world.fake.states[1]["previous_actions"] == state.history[:1]
+    assert writer.packets[-1]["actions_taken"] == state.history
+    assert "  → closed: alert 'Restore pages?'" in (tmp_path / "run" / "run.log").read_text()

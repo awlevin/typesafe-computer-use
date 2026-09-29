@@ -78,9 +78,10 @@ def no_real_machine(monkeypatch):
 
     The suite runs on the developer's own Mac, often while they use it. Every call that would
     move the pointer, press a key, run AppleScript (which opens apps and URLs), capture the
-    screen, open a file, or act on another app's accessibility element refuses here, so a test
-    that forgot to patch one fails instead of taking over the machine. A test that needs one
-    patches it itself, after this. The pointer reads as mid-screen, never the abort corner.
+    screen, open a file, read another app's window title, or act on another app's accessibility
+    element refuses here, so a test that forgot to patch one fails instead of taking over the
+    machine. A test that needs one patches it itself, after this. The pointer reads as mid-screen,
+    never the abort corner.
     """
 
     def refuse(what: str):
@@ -89,15 +90,26 @@ def no_real_machine(monkeypatch):
 
         return call
 
-    for name in ("_post", "osascript", "screenshot", "open_path"):
+    for name in ("_post", "osascript", "screenshot", "open_path", "frontmost_window_title"):
         monkeypatch.setattr(macos, name, refuse(f"macos.{name}"))
     monkeypatch.setattr(macos, "mouse_location", lambda: (500.0, 500.0))
     if REAL_ACCESSIBILITY:
         for name in ("AXUIElementPerformAction", "AXUIElementSetAttributeValue"):
             monkeypatch.setattr(macos.AS, name, refuse(f"ApplicationServices.{name}"))
     # The Windows adapter: SendInput and the cursor carry all input; the rest launch, activate,
-    # open, capture, or act on another app's element.
-    for name in ("_send", "_move", "screenshot", "activate", "open_url", "open_path", "ax_press", "ax_focus", "ax_set_value"):
+    # open, capture, read another app's window, or act on another app's element.
+    for name in (
+        "_send",
+        "_move",
+        "screenshot",
+        "activate",
+        "open_url",
+        "open_path",
+        "frontmost_window_title",
+        "ax_press",
+        "ax_focus",
+        "ax_set_value",
+    ):
         monkeypatch.setattr(windows, name, refuse(f"windows.{name}"))
     monkeypatch.setattr(windows, "mouse_location", lambda: (500.0, 500.0))
 

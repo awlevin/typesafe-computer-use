@@ -30,6 +30,7 @@ from typesafe_computer_use.platform_adapter import current, host
 FIXTURE = (Path(__file__).parent / "fixtures" / "osworld" / "ubuntu-chrome.xml").read_text()
 NO_ACTIVE_WINDOW = Path(__file__).parent / "fixtures" / "osworld" / "ubuntu-chrome-no-active-window-captured.xml"
 RESTORE_BUBBLE = Path(__file__).parent / "fixtures" / "osworld" / "ubuntu-chrome-restore-bubble-captured"
+ORGANISE_MENU = Path(__file__).parent / "fixtures" / "osworld" / "ubuntu-chrome-organise-menu-captured.xml"
 DISPLAY = (1920, 1080)
 GOAL = "open Gmail"
 STEP_SECONDS = 10.0
@@ -169,7 +170,11 @@ def test_typing_is_one_action_and_its_check_reads_the_step_after_it(jev, tmp_pat
     assert response.startswith("jev ended: done")
 
     summary = run_json(tmp_path)
-    assert summary["history"] == ["typed 'hello world' into 'Address and search bar' via keystrokes (verified 0.95)"]
+    # The address bar holds the text, under the same title: no new page, and what the field holds.
+    assert summary["history"] == [
+        "typed 'hello world' into 'Address and search bar' via keystrokes (verified 0.95)"
+        " → 'Address and search bar' holds 'hello world'"
+    ]
     second = json.loads((tmp_path / "jev" / "step-002-answers.json").read_text())
     assert second["url"] == "hello world"
 
@@ -185,7 +190,7 @@ def test_typing_goes_into_the_focused_field_when_no_window_is_active(jev, tmp_pa
     assert response == "type_text (0.90)"
 
     assert agent.predict(GOAL, obs(tree.replace(">Person 1</entry>", ">Thomas</entry>")))[1] == ["DONE"]
-    assert run_json(tmp_path)["history"] == ["typed 'Thomas' into 'Name' via keystrokes (verified 0.95)"]
+    assert run_json(tmp_path)["history"] == ["typed 'Thomas' into 'Name' via keystrokes (verified 0.95) → 'Name' holds 'Thomas'"]
 
 
 def test_a_name_the_writer_submits_goes_out_with_its_return_as_one_action(jev, tmp_path):
@@ -199,14 +204,15 @@ def test_a_name_the_writer_submits_goes_out_with_its_return_as_one_action(jev, t
     assert response == "type_text (0.90)"
 
     assert agent.predict(GOAL, obs(tree))[1] == ["DONE"]
-    assert run_json(tmp_path)["history"] == ["typed 'Thomas' into 'Name' via keystrokes and pressed Return"]
+    assert run_json(tmp_path)["history"] == ["typed 'Thomas' into 'Name' via keystrokes and pressed Return → no change"]
 
 
 def test_an_item_under_a_popup_is_clicked_in_the_action_that_closes_the_popup(jev, tmp_path):
     """OSWorld's chrome/2ad9387a, from the tree and capture of that run: the "Restore pages?" bubble's
     Close button sat over the bookmark manager's Organise button. jev clicked Organise, which closed
     the bubble, saw no menu, and took two more steps to open it. Now the bubble is closed by its Close
-    button and Organise clicked after it, in one action, and never by its Restore button."""
+    button and Organise clicked after it, in one action, and never by its Restore button. The next
+    tree, of the same run, shows Organise's menu, and the action's history line says so."""
     captured = {
         "screenshot": RESTORE_BUBBLE.with_suffix(".png").read_bytes(),
         "accessibility_tree": RESTORE_BUBBLE.with_suffix(".xml").read_text(),
@@ -221,8 +227,10 @@ def test_an_item_under_a_popup_is_clicked_in_the_action_that_closes_the_popup(je
     assert "\"button 'Organise' (top-right; under 'Restore pages?')\"" in payload
     assert payload.count("under 'Restore pages?'") == 1, "the bubble's own controls are not under it"
 
-    assert agent.predict(GOAL, captured)[1] == ["DONE"]
-    assert run_json(tmp_path)["history"] == ["closed 'Restore pages?' then clicked 'Organise'"]
+    assert agent.predict(GOAL, obs(ORGANISE_MENU.read_text()))[1] == ["DONE"]
+    assert run_json(tmp_path)["history"] == [
+        "closed 'Restore pages?' then clicked 'Organise' → opened: menu ('Sort by name', 'Add new bookmark', …)"
+    ]
 
 
 def test_a_wait_is_a_wait_step_and_a_stall_ends_in_done(jev, tmp_path):
@@ -480,6 +488,7 @@ def test_reads_before_input_use_the_obs_in_hand_and_the_first_read_after_input_e
     assert desktop.browser_url("Google Chrome") == "https://www.google.com/"
     assert desktop.frontmost_app_and_pid() == ("Google Chrome", APP_PID)
     assert desktop.frontmost_window_bounds() == (70.0, 27.0, 1850.0, 1053.0)
+    assert desktop.frontmost_window_title() == "Google - Google Chrome"
     assert desktop.focused_field().label == "Address and search bar"
     assert "Gmail" in {node.label for node in desktop.actionable_elements(APP_PID, *DISPLAY)[0]}
     assert handed == []
@@ -624,6 +633,7 @@ def test_with_no_tree_nothing_is_known_but_the_screenshot_and_ocr():
     desktop = over(obs(tree=None))
     assert desktop.frontmost_app_and_pid() == ("", APP_PID)
     assert desktop.frontmost_window_bounds() is None
+    assert desktop.frontmost_window_title() is None
     assert desktop.focused_field() is None
     assert desktop.browser_url("Google Chrome") is None
     assert desktop.actionable_elements(APP_PID, *DISPLAY) == ([], [], False)

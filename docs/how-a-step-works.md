@@ -17,6 +17,7 @@ dates.py      ─► "dated 2026-10-13 (in 27 days)" on any block containing a d
                  "near a line dated ..." on its neighbours, none from the menu bar's clock
 layout        ─► "in the row of ..." on any label that appears more than once
 runner.py     ─► the actions already tried on this same screen, each of which led back here
+outcome.py    ─► each past action's line ends with what came of it: "→ went to chrome://bookmarks"
                      │
                      ▼
         one TypeSafe request, three Choices, four with off-screen controls
@@ -56,6 +57,44 @@ Splitting the decision into three questions keeps screen noise out of the action
 choice. Every stall found while building this came from two options that meant the
 same thing. Confidence measures concentration, so overlapping options always read as
 doubt. Keep the action set mutually exclusive.
+
+## What came of an action
+
+A decision reads the screen now showing and the last eight actions, never the screen before, so an
+action's line says what came of it as well as what was tried. The next capture is compared with
+the one the action was taken on, and the coarsest change ends the line, in what every tree gives
+(roles, names, the page, labels), with OCR's text for the labels where there is no tree:
+
+| change | line |
+|---|---|
+| a new URL (under a new window title, where titles are known), app, or window title | `clicked 'Bookmark manager' → went to chrome://bookmarks` |
+| a popup opened: a window, dialog, alert, or menu, by role and name, or by its first items when it has no name | `clicked 'Organise' → opened: menu ('Sort by name', 'Add new bookmark', …)` |
+| a popup closed, and none opened | `clicked 'Organise' → closed: alert 'Restore pages?'` |
+| items came or went, controls first | `scrolled down → new: 'Post 3', 'Post 4', …; gone: 'Post 1', …` |
+| on the same screen, as the stall rules count one: the focus moved to a text field | `clicked 'Name' → focused 'Name'` |
+| or the focused text field holds something else | `typed 'Thomas' into 'Name' … and pressed Return → 'Name' holds 'Thomas'` |
+| or nothing | `clicked 'Refresh' → no change` |
+
+The walk marks each control inside a node with a popup role that is on screen: AT-SPI's alert,
+dialog, and menu in an OSWorld VM, a sheet or popover on a Mac. Chrome keeps a closed dropdown's
+menu in the tree with no frame, so that is no popup. A popup is named by all its controls in the
+tree, drawn or not: a capture can lag the tree, and on chrome/2ad9387a a menu named by the one item
+the capture had drawn, `menu ('Sort by name')`, led the answer model to name "the three-dot menu",
+which the classifier took for Chrome's own, in 15 of 17 reviews, against 7 of 17 with all six
+items named. Chrome's settings list down the side of its
+pages is a menu too, which a modal dialog hides from the tree; a menu that shows as a dialog closes
+did not open. When one of the two screens had a tree and the other none, the line ends as it was:
+Chrome builds its tree only once asked, so a task's first capture may have none, and what the tree
+brings then is no change the action made. A line stays about twenty tokens. The same lines go to
+the writer and the answer.
+
+In a replay of 170 captured requests from OSWorld's Chrome tasks, each sent twice as it went out
+and twice with its lines ended this way, the classifier's mean confidence rose from 0.62 to 0.64,
+most where a line said a dialog closed after its Save (a `done` at 0.45 went to 0.65) or that a
+menu opened, and the requests grew by 53 tokens. It picked the same action for the same request
+98% of the time, and 90% of the time across the two. A closed popup is said without "opened:
+nothing" after it: those words lowered its confidence in a `done` after a dialog's Save, and in
+clicking Organise again after the bubble took the first click.
 
 ## OCR cost
 
@@ -188,8 +227,8 @@ writer, which answers and may hand the run back (below).
 
 ## Stalls
 
-Nothing in an action's description says what came of it; only the next capture
-does. So each step keeps a signature of the screen (the app, the page, the text on it) and
+An action's description says what was tried; only the next capture says what came of
+it. So each step keeps a signature of the screen (the app, the page, the text on it) and
 the loop stops after three actions in a row that left the screen as it was (a refused
 action, a wait on a page still loading, a scroll that has run out of page) or after two in a
 row that were already taken on the same screen earlier in the run (a click that does

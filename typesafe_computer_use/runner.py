@@ -14,6 +14,7 @@ from .calls import Calls, MeteredClassifier, MeteredWriter
 from .config import DEFAULT_DELAY, DEFAULT_HANDOFFS, DEFAULT_MIN_CONFIDENCE, DEFAULT_STEPS, MAX_OPTIONS
 from .decide import Decision, decide, offscreen_records
 from .models import Abort, Guidance, Item, Screen, Signature, same_screen, signature
+from .outcome import ARROW, Glance, change, glance
 from .perception import OcrCache, capture, perceive
 from .platform_adapter import desktop
 from .report import Log, annotate, ax_count, render_payload, top
@@ -77,7 +78,8 @@ class Handoff:
 
 @dataclass
 class RunState:
-    history: list[str] = field(default_factory=list)
+    history: list[str] = field(default_factory=list)  # each action, and what came of it once a capture showed it
+    acted_on: Glance | None = None  # the screen the last action was taken on, until a capture shows what came of it
     timings: list[dict[str, float]] = field(default_factory=list)
     idle: int = 0  # actions in a row that changed nothing on screen
     repeats: int = 0  # actions in a row already taken on the same screen
@@ -253,6 +255,7 @@ def review(cfg: RunConfig, ctx: Context, state: RunState, stopped: str, can_ask:
         screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser)
         screen.image.save(cfg.out / "answer-raw.png")
         state.view = (screen, perceive(screen, MAX_OPTIONS, cfg.goal))
+        told(state, *state.view)
     screen, items = state.view
     earlier = earlier_screens(state, signature(screen, items))
     earlier_stops = [{"after_action": h.actions, "why": STOPPED[h.outcome], "focus_given": h.focus} for h in state.handoffs]
@@ -290,6 +293,9 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
         screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser, timing, ahead=cache if cfg.read_ahead else None)
     items = perceive(screen, MAX_OPTIONS, cfg.goal, timing, cache)
     state.view = (screen, items)
+    came = told(state, screen, items)
+    if came is not None:
+        log(f"  → {came}")  # under the step that acted, whose line it ends
     if not screen_moved(state, screen, items, log):
         return False
     tried = tried_here(state)
@@ -365,8 +371,22 @@ def resolve(
         what = perform(decision, screen, items, ctx)
     state.view = None
     state.history.append(what)
+    state.acted_on = glance(screen, items)
     log(f"  did: {what}")
     return not repeating(state, what, decision.kind.choice == "wait", log)
+
+
+def told(state: RunState, screen: Screen, items: list[Item]) -> str | None:
+    """End the last action's history line with what came of it, now that a capture shows it (see
+    `outcome`). Returns what it added, or None when no action was waiting or the two screens do not
+    say."""
+    if state.acted_on is None:
+        return None
+    came = change(state.acted_on, glance(screen, items))
+    state.acted_on = None
+    if came is not None:
+        state.history[-1] += ARROW + came
+    return came
 
 
 def screen_moved(state: RunState, screen: Screen, items: list[Item], log: Log) -> bool:

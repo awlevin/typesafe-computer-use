@@ -215,6 +215,9 @@ class OSWorldDesktop:
     def frontmost_window_bounds(self, pid: int | None = None) -> tuple[float, float, float, float] | None:
         return a11y.frame(a11y.active_window(self._now()))
 
+    def frontmost_window_title(self, pid: int | None = None) -> str | None:
+        return a11y.window_title(self._now())
+
     # ----- capture, OCR, and accessibility ---------------------------------------------------
 
     def screenshot(self) -> Image.Image:

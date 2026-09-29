@@ -182,13 +182,28 @@ def frontmost_window_bounds(pid: int | None = None) -> tuple[float, float, float
 
     Pass the pid when the caller already has it; looking it up costs an AppleScript round trip.
     """
+    window = _front_window(pid)
+    if window is None:
+        return None
+    b = window["kCGWindowBounds"]
+    return float(b["X"]), float(b["Y"]), float(b["Width"]), float(b["Height"])
+
+
+def frontmost_window_title(pid: int | None = None) -> str | None:
+    """The title of the same window. Quartz gives it only with the screen recording permission a
+    capture needs anyway."""
+    window = _front_window(pid)
+    return (window.get("kCGWindowName") or None) if window is not None else None
+
+
+def _front_window(pid: int | None) -> dict | None:
     pid = frontmost_pid() if pid is None else pid
     options = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
     for window in Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID) or []:
         if window.get("kCGWindowOwnerPID") == pid and window.get("kCGWindowLayer") == 0:
             b = window["kCGWindowBounds"]
             if b["Width"] > MIN_WINDOW_SIDE_PT and b["Height"] > MIN_WINDOW_SIDE_PT:
-                return float(b["X"]), float(b["Y"]), float(b["Width"]), float(b["Height"])
+                return window
     return None
 
 

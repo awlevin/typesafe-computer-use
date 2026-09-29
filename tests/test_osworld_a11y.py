@@ -346,6 +346,19 @@ def test_a_nameless_window_with_a_control_is_a_popup_and_the_last_one_listed_is_
     assert (popup.name, popup.title, popup.x) == ("", "a popup", 750.0)
 
 
+def test_the_window_title_is_the_browsers_frame_even_while_a_menu_window_is_active():
+    """Chrome's menu is a nameless window of its own, and it takes the keyboard while it is open."""
+    tree = chrome_with(window("frame", "", 750, control("menu-item", "Settings")))
+    assert a11y.window_title(tree) == "Page - Google Chrome"
+    active = f"{{{a11y.NS_STATE}}}active"
+    browser, menu = tree.iter("frame")
+    browser.attrib.pop(active)
+    menu.set(active, "true")
+    assert a11y.active_window(tree) is menu
+    assert a11y.window_title(tree) == "Page - Google Chrome"
+    assert a11y.window_title(None) is None
+
+
 def test_a_window_with_no_control_covers_nothing():
     """Chrome's status bubble shows a link's address in a nameless window, and moves off the pointer."""
     assert save(chrome_with(window("frame", "", 800, control("static", "https://example.com/")))).covered_by is None

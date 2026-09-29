@@ -406,6 +406,14 @@ def frontmost_window_bounds(pid: int | None = None) -> tuple[float, float, float
     return None
 
 
+def frontmost_window_title(pid: int | None = None) -> str | None:
+    """The foreground window's title, when it still belongs to `pid`."""
+    hwnd = win32gui.GetForegroundWindow()
+    if pid is not None and _window_pid(hwnd) != pid:
+        return None
+    return win32gui.GetWindowText(hwnd) or None
+
+
 def frontmost_window_center(pid: int | None = None) -> tuple[float, float] | None:
     """Center of the frontmost app's topmost on-screen window, in screen pixels."""
     bounds = frontmost_window_bounds(pid)
