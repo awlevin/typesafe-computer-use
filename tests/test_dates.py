@@ -14,6 +14,14 @@ def test_parses_common_forms():
     assert first_date("4 Nov 2026", TODAY) == date(2026, 11, 4)
 
 
+def test_year_after_comma_with_no_space():
+    assert first_date("Jun 18,2026", TODAY) == date(2026, 6, 18)
+
+
+def test_stray_leading_digit_does_not_beat_the_real_month_first_date():
+    assert first_date("1 Apr 30, 2026", TODAY) == date(2026, 4, 30)
+
+
 def test_no_date_and_invalid_date():
     assert first_date("Register Now", TODAY) is None
     assert first_date("Feb 30", TODAY) is None

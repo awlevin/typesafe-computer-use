@@ -15,8 +15,8 @@ MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", 
 _MONTH = r"jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec"
 _DASHES = "[-\u2013\u2014]"  # hyphen, en dash, em dash between the days of a range
 DATE_RE = re.compile(
-    rf"\b(?:(?P<mon>{_MONTH})[a-z]*\.?\s+(?P<day>\d{{1,2}})(?:\s*{_DASHES}\s*\d{{1,2}})?(?:,?\s+(?P<year>\d{{4}}))?"
-    rf"|(?P<day2>\d{{1,2}})\s+(?P<mon2>{_MONTH})[a-z]*\.?(?:,?\s+(?P<year2>\d{{4}}))?"
+    rf"\b(?:(?P<mon>{_MONTH})[a-z]*\.?\s+(?P<day>\d{{1,2}})(?:\s*{_DASHES}\s*\d{{1,2}})?(?:(?:,\s*|\s+)(?P<year>\d{{4}}))?"
+    rf"|(?P<day2>\d{{1,2}})\s+(?P<mon2>{_MONTH})[a-z]*\.?(?:(?:,\s*|\s+)(?P<year2>\d{{4}}))?"
     r"|(?P<iso>\d{4}-\d{2}-\d{2})"
     r"|(?P<m>\d{1,2})/(?P<d>\d{1,2})/(?P<y>\d{4}))\b",
     re.IGNORECASE,
@@ -39,6 +39,13 @@ def first_date(text: str, today: date | None = None) -> date | None:
     m = DATE_RE.search(text)
     if not m:
         return None
+    if m.group("day2"):
+        # A stray leading digit (e.g. an icon read as "1") can match the day-first form
+        # before the real, month-first date a bit further on. If a month-first match
+        # starting right at that month covers more of the text, it wins instead.
+        alt = DATE_RE.match(text, m.start("mon2"))
+        if alt and alt.group("mon") and alt.end() > m.end():
+            m = alt
     try:
         if m.group("iso"):
             return date.fromisoformat(m.group("iso"))
