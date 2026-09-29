@@ -4,7 +4,15 @@
 in an Ubuntu VM and scored by OSWorld's own checks. jev runs there as an OSWorld agent,
 `JevAgent` in `typesafe_computer_use/osworld/`, and OSWorld's own GPT agent runs the same task
 with GPT-6 Luna to compare against. OSWorld's runner does the reset, the steps, the scoring, and
-the recording. Both agents get the same task, 50 steps, and 2 seconds after each action.
+the recording. Both agents get the same task, 50 steps, and no wait after each action:
+`SLEEP_AFTER_EXECUTION` in `scripts/osworld` is 0, where runs up to 2026-09-29 had 2 seconds, and
+each benchmark row records it ([Results](#results)). Each agent waits only when it chooses to,
+with a sleep in the VM: Luna for as long as it asks, a second by default, and jev for 0.5 s,
+when what the goal needs is not on the screen yet, before it looks again. Neither uses OSWorld's
+`WAIT` action, which sleeps the fixed pause. With no pause, OSWorld's screenshot can come before
+Chrome has drawn what an action did, so jev looks once more, the same 0.5 s later, when the screen
+seems unchanged, or when the capture lacks many of the controls its tree has
+([Stalls](how-a-step-works.md#stalls)). Each such look is an OSWorld step of its own.
 
 OSWorld's VM runs under QEMU and needs a Linux host with KVM, so it does not run on a Mac.
 [Run in Google Cloud](#run-in-google-cloud) sets one up.
@@ -70,11 +78,12 @@ After each cloud run, `scripts/osworld-gcp` appends one JSON line per task to
 `benchmarks/osworld/<run>.jsonl`: the score, steps, time, outcome, and tokens per model (for Luna,
 also its model time and reasoning effort; for jev, where its trees came from and how many fell back
 to OSWorld's fetch), with the commit the run synced, whether the synced copy
-differed from it (and a hash of the difference), OSWorld's pinned commit, the command, and the
-machine. Rows are never edited; a rerun is a new file. They are not committed for you: committing a
-run's file is what makes it part of the record, and a row from a dirty copy says so. A pull the
-tunnel drops is tried again; when the results still do not come back, the run records no rows, which
-would say that no task came back, and prints the command that records them after `pull-results`.
+differed from it (and a hash of the difference), OSWorld's pinned commit, the wait after each action
+(`sleep_after_execution`; a row without it waited 2 s), the command, and the machine. Rows are never
+edited; a rerun is a new file. They are not committed for you: committing a run's file is what makes
+it part of the record, and a row from a dirty copy says so. A pull the tunnel drops is tried again;
+when the results still do not come back, the run records no rows, which would say that no task came
+back, and prints the command that records them after `pull-results`.
 Screenshots and recordings stay in `results/`, out of git.
 
 OSWorld keeps no accessibility tree. With `JEV_OSWORLD_SAVE_A11Y=1` (in the environment or `.env`),
@@ -87,7 +96,7 @@ counting from `000`, the task's first, and OSWorld's full tree of the same scree
 
 OSWorld's own tree fetch walks every application on the desktop, about 2,500 nodes on a Chrome task,
 2,100 of them GNOME Shell's, asks each node about ten questions over D-Bus, and runs
-`libreoffice --version` first: 2.4 s of every step, most of a step's time besides OSWorld's 2 s wait.
+`libreoffice --version` first: 2.4 s of every step, most of a step's time besides OSWorld's wait, 2 s then.
 jev reads one application of that tree. So jev's runner asks OSWorld for the screenshot alone, and
 jev fetches the tree itself when each observation comes (`osworld/tree.py`): `osworld/light_walk.py`
 runs in the VM through OSWorld's `/run_python` endpoint, finds the application in front as
@@ -101,7 +110,7 @@ The fetch runs on a thread of its own while the step's OCR reads the screenshot,
 the tree waits for it. The OCR bets on the previous step's app and window, which a page in one
 window keeps, and the step reads the screen again itself when the tree says otherwise
 (`OcrCache.read_ahead` in `perception.py`). No fetch runs while the VM acts: the step's actions go
-to OSWorld only once the fetch before them is over. OSWorld's 2 s wait and its `env.step` for every
+to OSWorld only once the fetch before them is over. OSWorld's wait and its `env.step` for every
 action stay as they were, so the tree's time moves from OSWorld's step into jev's own.
 
 When the light walk fails, takes longer than 10 s, or leaves the tree to OSWorld (a spreadsheet,

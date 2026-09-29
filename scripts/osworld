@@ -31,9 +31,10 @@ CHECKOUT="$REPO/.osworld/OSWorld-V2"
 PYTHON="$CHECKOUT/.venv/bin/python"
 RESULTS="$REPO/results"
 
-# The same for both agents, so their runs compare.
+# The same for both agents, so their runs compare. OSWorld's fixed wait after each action, in
+# seconds, and each benchmark row records it: runs up to 2026-09-29 waited 2.0.
 MAX_STEPS=50
-SLEEP_AFTER_EXECUTION=2.0
+SLEEP_AFTER_EXECUTION=0
 JEV_MODEL=jev  # the name OSWorld files jev's results under
 JEV_OBSERVATION=screenshot_a11y_tree
 LUNA_MODEL=gpt-6-luna

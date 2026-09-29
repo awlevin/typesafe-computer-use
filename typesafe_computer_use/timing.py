@@ -6,7 +6,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-PHASE_ORDER = ("capture", "screenshot", "app", "window", "field", "url", "ocr", "ax", "decide", "act", "total")
+PHASE_ORDER = ("capture", "screenshot", "app", "window", "field", "url", "ocr", "ax", "again", "decide", "act", "total")
 # None of these is a phase: each prints on the ocr phase rather than as a phase of its own.
 OCR_REGION_PCT = "ocr_region_pct"  # share of the capture handed to Vision
 OCR_RECTS = "ocr_rects"  # how many rectangles it took, 0 for a full read or for nothing to read

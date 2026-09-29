@@ -96,7 +96,9 @@ def perceive(
     `screen.covered` is a side table the same way: the items under a popup, and which popup.
 
     Fills `screen.offscreen` too: labelled controls the app exposes but does not show. They are
-    offered on their own, never as items, because nothing on the capture points at them.
+    offered on their own, never as items, because nothing on the capture points at them. Those the
+    tree puts on screen but the capture does not show are also in `screen.undrawn`: a page may hide
+    a few, and many say the capture is older than the tree.
 
     A `cache` carries the previous capture's OCR, so only the tiles that changed are read again.
     Pass None to read the whole region every time, which is what a replay and an inspection do.
@@ -108,6 +110,8 @@ def perceive(
         gray = screen.image.convert("L")
         blank = [node for node in nodes if not drawn(gray, node, screen.scale)]
         nodes = [node for node in nodes if node not in blank]
+        screen.undrawn.clear()
+        screen.undrawn.extend(blank)
         hidden = hidden + blank
         controls = to_ax_items(nodes, screen.scale)
     merged = merge_with_origins([block for block in blocks if not in_field(block, screen)], controls, budget)

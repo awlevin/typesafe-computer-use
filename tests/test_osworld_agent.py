@@ -21,11 +21,13 @@ from conftest import busy_page
 from world import FakeTypeSafe, FakeWriter, scripted
 
 from typesafe_computer_use import runner
+from typesafe_computer_use.actions import WAIT_SECONDS
 from typesafe_computer_use.decide import Decision
 from typesafe_computer_use.osworld import ocr, tree
 from typesafe_computer_use.osworld.agent import SAVE_A11Y, JevAgent, describe
 from typesafe_computer_use.osworld.desktop import APP_PID, OSWorldDesktop
 from typesafe_computer_use.platform_adapter import current, host
+from typesafe_computer_use.runner import MAX_IDLE, MAX_WAITS
 
 FIXTURE = (Path(__file__).parent / "fixtures" / "osworld" / "ubuntu-chrome.xml").read_text()
 NO_ACTIVE_WINDOW = Path(__file__).parent / "fixtures" / "osworld" / "ubuntu-chrome-no-active-window-captured.xml"
@@ -56,9 +58,15 @@ def obs(tree: str | None = FIXTURE) -> dict:
     return {"screenshot": SCREENSHOT, "accessibility_tree": tree, "instruction": GOAL}
 
 
+LOOK_AGAIN = f"time.sleep({WAIT_SECONDS})"  # a step that looks once more before it decides
+
+
 def with_address(text: str) -> str:
     """The fixture with the address bar holding `text`."""
     return FIXTURE.replace(">https://www.google.com/</entry>", f">{text}</entry>")
+
+
+GMAIL = with_address("https://mail.google.com/")  # the screen after the click on Gmail, another page
 
 
 def run_json(out_root: Path) -> dict:
@@ -108,7 +116,7 @@ def test_a_click_decision_becomes_one_pyautogui_click(jev, tmp_path):
     assert response == "click_item 'Gmail' (0.90)"
     assert isinstance(current(), OSWorldDesktop), "the worker drives the VM's adapter while the run is on"
 
-    response, actions = agent.predict(GOAL, obs())
+    response, actions = agent.predict(GOAL, obs(GMAIL))
     assert actions == ["DONE"]
     assert response == "jev ended: done"
     finish(agent)
@@ -125,7 +133,7 @@ def test_the_raw_trees_are_saved_only_when_asked(jev, tmp_path, monkeypatch):
     monkeypatch.delenv(SAVE_A11Y, raising=False)
     agent = jev(scripted(("click_item", "Gmail")))
     agent.predict(GOAL, obs())
-    agent.predict(GOAL, obs())
+    agent.predict(GOAL, obs(GMAIL))
     finish(agent)
     assert not list((tmp_path / "jev").glob("obs-*")), "nothing is saved by default"
 
@@ -184,7 +192,9 @@ def test_typing_goes_into_the_focused_field_when_no_window_is_active(jev, tmp_pa
     assert actions == [typed("Thomas")]
     assert response == "type_text (0.90)"
 
-    assert agent.predict(GOAL, obs(tree.replace(">Person 1</entry>", ">Thomas</entry>")))[1] == ["DONE"]
+    typed_in = obs(tree.replace(">Person 1</entry>", ">Thomas</entry>"))
+    assert agent.predict(GOAL, typed_in)[1] == [LOOK_AGAIN], "only the field changed, which reads as the same screen"
+    assert agent.predict(GOAL, typed_in)[1] == ["DONE"]
     assert run_json(tmp_path)["history"] == ["typed 'Thomas' into 'Name' via keystrokes (verified 0.95)"]
 
 
@@ -198,6 +208,7 @@ def test_a_name_the_writer_submits_goes_out_with_its_return_as_one_action(jev, t
     assert actions == [f"{typed('Thomas')}\npyautogui.press('enter')"]
     assert response == "type_text (0.90)"
 
+    assert agent.predict(GOAL, obs(tree))[1] == [LOOK_AGAIN], "Return has not shown yet: look once more"
     assert agent.predict(GOAL, obs(tree))[1] == ["DONE"]
     assert run_json(tmp_path)["history"] == ["typed 'Thomas' into 'Name' via keystrokes and pressed Return"]
 
@@ -221,20 +232,39 @@ def test_an_item_under_a_popup_is_clicked_in_the_action_that_closes_the_popup(je
     assert "\"button 'Organise' (top-right; under 'Restore pages?')\"" in payload
     assert payload.count("under 'Restore pages?'") == 1, "the bubble's own controls are not under it"
 
+    assert agent.predict(GOAL, captured)[1] == [LOOK_AGAIN], "the same capture came back: look once more"
     assert agent.predict(GOAL, captured)[1] == ["DONE"]
     assert run_json(tmp_path)["history"] == ["closed 'Restore pages?' then clicked 'Organise'"]
 
 
-def test_a_wait_is_a_wait_step_and_a_stall_ends_in_done(jev, tmp_path):
+def test_a_wait_is_a_pause_in_the_vm_and_a_page_that_never_loads_ends_in_done(jev, tmp_path):
+    """A wait sleeps in the VM itself, since OSWorld's own WAIT sleeps its fixed pause, which may be 0."""
     agent = jev(always("wait"))
 
-    for _ in range(3):
-        assert agent.predict(GOAL, obs()) == ("wait (0.90)", ["WAIT"])
+    for _ in range(MAX_WAITS + MAX_IDLE):  # the first waits in a row are not idle; the page never loads
+        response, actions = agent.predict(GOAL, obs())
+        assert (response, actions) == ("wait (0.90)", [f"time.sleep({WAIT_SECONDS})"])
+        assert in_fake_vm(actions[0], window=True) == [("sleep", WAIT_SECONDS)]
     response, actions = agent.predict(GOAL, obs())
 
     assert actions == ["DONE"]
     assert response == "jev ended: stalled"
     assert run_json(tmp_path)["outcome"] == "stalled"
+
+
+def test_a_refused_action_still_brings_a_new_observation(jev, tmp_path):
+    """A refused action sends nothing, so OSWorld took no new observation, and the next step would read
+    the one it had just acted on. It looks again instead: a wait's pause in the VM, and what OSWorld
+    sees after it. chrome/af630914 at no wait pressed an off-screen 'Settings' three times over one
+    stale capture of a menu Chrome had not drawn yet."""
+    agent = jev(scripted(("type_text", None), ("click_item", "Gmail")))  # no writer, so the typing is refused
+
+    assert agent.predict(GOAL, obs()) == ("type_text (0.90)", [LOOK_AGAIN])
+    assert agent.predict(GOAL, obs()) == ("click_item 'Gmail' (0.90)", [CLICK_GMAIL])
+    assert agent.predict(GOAL, obs(GMAIL))[1] == ["DONE"]
+    second = json.loads((tmp_path / "jev" / "step-002-answers.json").read_text())
+    assert second["looked_again"] == "the screen is as the last action found it"
+    assert run_json(tmp_path)["history"][0] == "type_text refused: no writer available"
 
 
 def test_done_is_done_at_once(jev, tmp_path):
@@ -298,6 +328,7 @@ def test_given_the_controller_jev_fetches_each_observations_tree_itself(jev, tmp
     agent = jev(scripted(("click_item", "Gmail")), provider="docker", controller=lambda: vm)
 
     assert agent.predict(GOAL, obs(tree=None))[1] == [CLICK_GMAIL], "OSWorld sent no tree, and jev had one"
+    vm.xml = GMAIL
     assert agent.predict(GOAL, obs(tree=None))[1] == ["DONE"]
     finish(agent)
 
@@ -315,6 +346,7 @@ def test_when_the_light_walk_fails_osworlds_fetch_stands_in_and_the_run_says_so(
     agent = jev(scripted(("click_item", "Gmail")), controller=lambda: vm)
 
     assert agent.predict(GOAL, obs(tree=None))[1] == [CLICK_GMAIL]
+    vm.xml = GMAIL
     assert agent.predict(GOAL, obs(tree=None))[1] == ["DONE"]
     finish(agent)
 
@@ -355,7 +387,8 @@ def test_a_vm_that_stops_answering_costs_a_step_its_tree_and_not_the_run(jev, tm
         response, actions = agent.predict(GOAL, obs(tree=None))
         assert actions == ["pyautogui.click(850, 515)"], "OCR alone carried the decision"
         assert response == "click_item 'Sign in' (0.90)"
-        agent.predict(GOAL, obs(tree=None))
+        assert agent.predict(GOAL, obs(tree=None))[1] == [LOOK_AGAIN], "OCR alone saw the same screen"
+        assert agent.predict(GOAL, obs(tree=None))[1] == ["DONE"]
         finish(agent)
     finally:
         vm.release.set()
@@ -391,7 +424,7 @@ def test_the_step_budget_hands_out_max_steps_lists_and_ends_in_done(jev, tmp_pat
     agent = jev(always("click_item", "Gmail"), max_steps=2, writer=writer)
 
     assert agent.predict(GOAL, obs()) == ("click_item 'Gmail' (0.90)", [CLICK_GMAIL])
-    response, actions = agent.predict(GOAL, obs())
+    response, actions = agent.predict(GOAL, obs(GMAIL))
 
     assert actions == [CLICK_GMAIL, "DONE"], "the last list still runs, and says the run is over"
     assert response == f"click_item 'Gmail' (0.90); jev ended: {outcome}"
@@ -585,7 +618,10 @@ def test_activate_raises_the_browser_or_starts_it_and_no_other_app():
 
 def test_the_other_inputs_and_waits():
     desktop = over(obs())
-    desktop.sleep_watching(3.0)
+    desktop.sleep_watching(0.5)
+    assert desktop.actions == ["time.sleep(0.5)"]  # with no input, a wait is an action of its own, run in the VM
+
+    desktop = over(obs())
     desktop.click_at((12.4, 99.6))
     desktop.clear_field()
     desktop.scroll(-10)
@@ -594,10 +630,9 @@ def test_the_other_inputs_and_waits():
     desktop.press("return")
 
     assert desktop.actions == [
-        "WAIT",  # with no input before it, an action of its own: OSWorld knows it only that way
         "\n".join(
             [
-                "pyautogui.click(12, 100)",  # input after a wait is not folded into it
+                "pyautogui.click(12, 100)",
                 CLEAR,
                 "pyautogui.scroll(-10, x=995, y=554)",  # over the active window's center
                 "time.sleep(0.5)",  # a pause between two inputs is in their code, so they stay one action
@@ -605,7 +640,7 @@ def test_the_other_inputs_and_waits():
             ]
         ),
     ]
-    ast.parse(PREFIX + desktop.actions[1])
+    ast.parse(PREFIX + desktop.actions[0])
 
 
 def test_input_after_the_browsers_code_runs_whichever_way_it_branched():

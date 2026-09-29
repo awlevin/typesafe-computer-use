@@ -46,7 +46,6 @@ RUN_FOLDER = "jev"  # jev's run folder, inside the task's result folder
 STEP_SECONDS = 600.0  # how long `predict` waits for one step before it gives up on the worker
 RESET_JOIN_SECONDS = 5.0  # how long `reset` waits for a stopped worker to write its run folder
 DONE = "DONE"
-WAIT = "WAIT"
 SAVE_A11Y = "JEV_OSWORLD_SAVE_A11Y"  # "1" saves each observation's raw tree into the run folder
 
 

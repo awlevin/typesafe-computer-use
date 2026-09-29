@@ -128,14 +128,14 @@ on the app, and the node and time caps bind first on a big tree: Notes and Chrom
 | key | does |
 |---|---|
 | `click_item` | press the element through the accessibility tree when the item came from it, so the press lands on the control rather than on whatever covers it; a mouse click at the center of the box otherwise, and as the fallback when the press is refused, after closing the popup in front of it when there is one |
-| `press_offscreen` | `AXPress` a labelled control the app exposes but does not show, chosen from the off-screen list; offered only when that list is not empty, and a refusal counts as a no-op since there is no pixel to fall back on |
+| `press_offscreen` | `AXPress` a labelled control the app exposes but does not show, chosen from the off-screen list; offered only when that list is not empty, and a refusal counts as a no-op since there is no pixel to fall back on, except for an item of a menu the tree has open on the display, which is clicked where the tree puts it: the capture has not drawn the menu yet |
 | `use_browser` | go to the browser, showing the website the `site` answer names: `none` brings it forward on the page already open there, a `SITES` catalog key opens that URL through AppleScript `open location`, and `other` opens a URL the writer proposes |
 | `type_text` | the writer composes the string; it is set on the focused element through the accessibility tree, with keystrokes as the fallback when the value does not read back, and a TypeSafe Noul then checks the field's value; text the writer submits gets Return at once instead, and the next screen is the check |
 | `type_email` | fills in `$CLICKER_EMAIL` the same way; refused unless a text field is focused |
 | `press_enter`, `press_escape` | keyboard |
 | `go_back` | Cmd-[, the browser's Back, when the last click led somewhere unhelpful |
 | `scroll_down`, `scroll_up` | 10 lines, after parking the cursor over the frontmost window |
-| `wait` | screen still loading: 3 s, then the step's own delay, so three waits cover a slow page |
+| `wait` | the screen is still loading and what the goal needs is not on it yet: 0.5 s, then the step's own delay, and a look again, so the next step acts on what the page shows first; in OSWorld a `time.sleep` in the VM |
 | `done`, `none` | stop |
 
 ## Where free text comes from
@@ -191,15 +191,35 @@ writer, which answers and may hand the run back (below).
 Nothing in an action's description says what came of it; only the next capture
 does. So each step keeps a signature of the screen (the app, the page, the text on it) and
 the loop stops after three actions in a row that left the screen as it was (a refused
-action, a wait on a page still loading, a scroll that has run out of page) or after two in a
-row that were already taken on the same screen earlier in the run (a click that does
-nothing, or a cycle through two pages). Two captures count as the same screen when at most
-one line differs, and that one is one line in ten or fewer: a clock or a ticker does not
-hide a stall, and a two-line modal on a dense page is not mistaken for nothing happening.
+action, a scroll that has run out of page) or after two in a row that were already taken on
+the same screen earlier in the run (a click that does nothing, or a cycle through two pages).
+A wait is never a repeat, and the first three waits in a row are not counted as idle either: a
+short wait often looks again before a loading page has changed, and a page still loading is
+not a stall. The waits after them count, so a page that never finishes stalls after six.
+Two captures count as the same screen when at most one line differs, and that one is one
+line in ten or fewer: a clock or a ticker does not hide a stall, and a two-line modal on a
+dense page is not mistaken for nothing happening.
 The memory figure Chromium adds to a tab's name ("Settings - Memory usage - 56.0 MB") is left
 out of the comparison, since it drifts between two captures of one screen.
 When more than that changes every step, a run that is getting nowhere runs to `--steps`:
 the rules err toward running on, never toward stopping a run that is making progress.
+
+A capture can also come before the screen has caught up with the action. In OSWorld it comes the
+moment the action ran, before Chrome has drawn a menu it opened, and a refused action sends
+nothing, so no new capture comes at all. So a step looks twice when the screen seems to be as the
+last action left it, and when eight or more of the controls the tree puts on screen are not on the
+capture, which then predates the tree. Of 384 OSWorld screens captured with a 2 s wait, 380 lacked
+six or fewer (a page hides a few), and the other four lacked 17 to 52: a menu or a page Chrome had
+not drawn yet, though the tree, read after the capture, already had it. The second look comes a
+wait's pause later, and the step decides on it, however it looks: one more look, never a wait
+until the screen settles. After a wait there is none, since the classifier has just looked again
+itself, and none when nothing acted since the last capture, as when the writer sends the
+classifier back to the screen it stopped on. The step's log says why it looked twice.
+
+A second look does not always help: on chrome/2ad9387a and chrome/bb5e4c0d at no wait, Chrome left
+a menu it had opened unpainted on every capture for seconds, while the tree had it open. So an
+item of such a menu, which reaches the classifier as an off-screen control, is clicked where the
+tree puts it when the press is refused (OSWorld refuses every press).
 
 ## The answer
 

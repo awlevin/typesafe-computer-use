@@ -15,8 +15,9 @@ from .platform_adapter import desktop
 from .writer import Writer, WriterError, compose_text, compose_url
 
 VERIFY_THRESHOLD = 0.5
-WAIT_SECONDS = 3.0  # what a wait adds to the settle delay every step already gets; three of them cover a slow page
+WAIT_SECONDS = 0.5  # a wait's pause before the next look; a page that takes longer gets several (see runner.MAX_WAITS)
 CLOSE_SECONDS = 0.5  # for a closed popup to leave the screen before the click under it
+MENU_ITEM = "AXMenuItem"
 
 
 @dataclass(frozen=True)
@@ -90,8 +91,12 @@ def press_offscreen(key: str, screen: Screen) -> str:
     """Press a control the app exposes but does not show.
 
     AXPress does not need the element to be visible: a note row scrolled thousands of points down
-    and a link the browser parked above the viewport both take it. There is no pixel to fall back
-    on, so a refusal is the end of it and reads as a no-op.
+    and a link the browser parked above the viewport both take it. There is mostly no pixel to fall
+    back on, so a refusal reads as a no-op. The one exception is an item of a menu the tree has open
+    on the display and the capture does not show: the menu is there, not drawn yet (Chrome in
+    OSWorld can leave a new menu unpainted for seconds), so it takes a click where the tree puts the
+    item. A page's own undrawn control does not: it may be clipped out of sight, and a click there
+    lands on the page.
     """
     nodes = screen.offscreen
     node = nodes[int(key)] if key.isdigit() and int(key) < len(nodes) else None
@@ -99,6 +104,12 @@ def press_offscreen(key: str, screen: Screen) -> str:
         return f"press_offscreen refused: there is no off-screen control {key!r}"
     if desktop.ax_press(node.ref):
         return f"pressed {node.label!r} (off-screen control) via accessibility"
+    if node.role == MENU_ITEM and node in screen.undrawn:
+        try:
+            desktop.click_at((node.x + node.w / 2, node.y + node.h / 2))
+        except Missed as e:
+            return f"press_offscreen refused: {node.label!r} was not clicked, {e}"
+        return f"clicked {node.label!r} where the tree puts it, in a menu the capture does not show yet"
     return f"press_offscreen refused: {node.label!r} did not accept the press"
 
 
@@ -216,7 +227,8 @@ def _scroll(lines: int, description: str):
 
 
 def _wait(decision, screen, items, ctx) -> str:
-    """Give a loading page time. The step's own delay follows, so a wait is worth both."""
+    """Give a loading page a moment, then look again. A short pause looks again sooner: the page
+    may show what the goal needs before it finishes, and the next step acts on it then."""
     desktop.sleep_watching(WAIT_SECONDS)
     return "waited"
 

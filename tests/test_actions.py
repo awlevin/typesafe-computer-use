@@ -78,6 +78,26 @@ def test_a_refused_off_screen_press_is_a_no_op_with_nothing_to_click(screen, cal
     assert calls == []
 
 
+def test_an_item_of_a_menu_the_capture_has_not_drawn_yet_is_clicked_where_the_tree_puts_it(screen, calls, monkeypatch):
+    """chrome/bb5e4c0d at no wait: Chrome's menu was open in the tree and missing from every capture for
+    seconds, and 'Settings' in it refused the press twice. The menu takes a click all the same."""
+    monkeypatch.setattr(desktop, "ax_press", lambda ref: False)
+    settings = AxNode(role="AXMenuItem", label="Settings", x=1515.0, y=700.0, w=405.0, h=29.0, pressable=True)
+    live = replace(screen, offscreen=[settings], undrawn=[settings])
+    assert press_offscreen("0", live) == "clicked 'Settings' where the tree puts it, in a menu the capture does not show yet"
+    assert calls == [("click", (1717.5, 714.5))]
+
+
+def test_a_pages_own_undrawn_control_is_not_clicked(screen, calls, monkeypatch):
+    """justice.gov's Agency filter keeps a clipped search box the tree calls showing: a click there
+    lands on empty page, so only a menu's items get the click."""
+    monkeypatch.setattr(desktop, "ax_press", lambda ref: False)
+    box = AxNode(role="AXTextField", label="Agency", x=500.0, y=400.0, w=300.0, h=30.0, pressable=True)
+    refusal = press_offscreen("0", replace(screen, offscreen=[box], undrawn=[box]))
+    assert refusal == "press_offscreen refused: 'Agency' did not accept the press"
+    assert calls == []
+
+
 def test_an_offscreen_key_that_names_nothing_is_refused(screen, calls, monkeypatch):
     monkeypatch.setattr(desktop, "ax_press", lambda ref: pytest.fail("no element to press"))
     refusal = press_offscreen("4", screen)

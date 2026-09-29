@@ -13,7 +13,7 @@ import json
 import pytest
 from world import FakeWriter, Page, World, drive, scripted
 
-from typesafe_computer_use.runner import MAX_REPEATS, MAX_STALLS, STOPPED
+from typesafe_computer_use.runner import MAX_IDLE, MAX_REPEATS, MAX_STALLS, MAX_WAITS, STOPPED
 
 GOAL = "buy a ticket to the next show"
 
@@ -423,17 +423,112 @@ def test_l16_a_page_that_never_loads_stops_within_the_idle_budget(monkeypatch, t
     world = World(
         [
             Page(name="home", items=["Home", "Tickets", "About"], url="https://example.com/", on={"click:Tickets": "tickets"}),
-            Page(name="tickets", items=["Buy", "Terms"], url="https://example.com/tickets", loads_in=10),
+            Page(name="tickets", items=["Buy", "Terms"], url="https://example.com/tickets", loads_in=20),
         ]
     )
-    policy = scripted(("click_item", "Tickets"), *[("wait", None)] * 10)
+    policy = scripted(("click_item", "Tickets"), *[("wait", None)] * 20)
 
     state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert state.outcome == "stalled"
-    assert state.history == ["clicked 'Tickets'"] + ["waited"] * 3
+    # The first waits in a row are the page still loading; the ones after them count as idle.
+    assert state.history == ["clicked 'Tickets'"] + ["waited"] * (MAX_WAITS + MAX_IDLE)
     assert world.page.name == "tickets"
-    assert world.log == ["click:Tickets"] + ["wait"] * 3
+    assert world.log == ["click:Tickets"] + ["wait"] * (MAX_WAITS + MAX_IDLE)
+
+
+def test_l16b_a_page_slower_than_the_idle_budget_is_waited_out(monkeypatch, tmp_path):
+    """Short waits look again before a slow page has changed. Those are not stalls, so a page that
+    takes more of them than the idle budget allows still loads, and the run goes on."""
+    waits = MAX_WAITS + MAX_IDLE - 1  # the most a page may take
+    assert waits > MAX_IDLE, "more waits than the idle budget, or this scenario says nothing"
+    world = World(
+        [
+            Page(name="home", items=["Home", "Tickets", "About"], url="https://example.com/", on={"click:Tickets": "tickets"}),
+            Page(
+                name="tickets",
+                items=["Buy", "Terms"],
+                url="https://example.com/tickets",
+                loads_in=waits,
+                on={"click:Buy": "checkout"},
+            ),
+            Page(name="checkout", items=["Order summary", "Pay now"], url="https://example.com/checkout"),
+        ]
+    )
+    policy = scripted(("click_item", "Tickets"), *[("wait", None)] * waits, ("click_item", "Buy"), ("done", None))
+
+    state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
+
+    assert state.outcome == "done"
+    assert state.history == ["clicked 'Tickets'", *["waited"] * waits, "clicked 'Buy'"]
+    assert world.page.name == "checkout"
+    assert state.stalls == 0 and not state.handoffs
+
+
+def test_l16c_a_wait_neither_counts_nor_clears_the_idle_actions_around_it(monkeypatch, tmp_path):
+    world = World([Page(name="tickets", items=["Buy", "Terms"], url="https://example.com/tickets")])
+    policy = scripted(
+        ("click_item", "Terms"),
+        ("wait", None),
+        ("scroll_down", None),
+        ("wait", None),
+        ("press_escape", None),
+        ("click_item", "Buy"),
+    )
+
+    state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
+
+    assert state.outcome == "stalled"  # three actions changed nothing, with two waits between them
+    assert state.history == ["clicked 'Terms'", "waited", "scrolled down", "waited", "pressed Escape"]
+    assert world.log == ["click:Terms", "wait", "scroll_down", "wait", "escape"]
+
+
+def test_l16d_a_screen_drawn_after_the_capture_is_looked_at_again_before_the_decision(monkeypatch, tmp_path):
+    """The capture can come before the screen shows what the action did: in OSWorld it comes the moment
+    the action ran. A screen that looks as the action found it gets a second look before anything is
+    decided on it, so the menu the click opened is there to click."""
+    first: list[int] = []  # the capture the click's page first showed on
+
+    def menu(world: World) -> list[str]:
+        """The menu is drawn one capture after the click."""
+        first[:] = first or [world.ticks]
+        return ["Home", "Menu"] if world.ticks == first[0] else ["Settings", "History", "Exit"]
+
+    world = World(
+        [
+            Page(name="home", items=["Home", "Menu"], url="https://example.com/", on={"click:Menu": "menu"}),
+            Page(name="menu", items=menu, url="https://example.com/", on={"click:Settings": "settings"}),
+            Page(name="settings", items=["Settings", "Privacy"], url="https://example.com/settings"),
+        ]
+    )
+    policy = scripted(("click_item", "Menu"), ("click_item", "Settings"), ("done", None))
+
+    state = drive(world, policy, goal="open the settings", monkeypatch=monkeypatch, tmp_path=tmp_path)
+
+    assert state.outcome == "done"
+    assert state.history == ["clicked 'Menu'", "clicked 'Settings'"]
+    assert world.page.name == "settings"
+    assert state.idle == 0, "the second look saw the menu, so the click did not read as idle"
+    second = json.loads((tmp_path / "run" / "step-002-answers.json").read_text())
+    assert second["looked_again"] == "the screen is as the last action found it"
+    assert [it["text"] for it in world.fake.states[1]["screen_items_in_reading_order"]] == ["Settings", "History", "Exit"]
+
+
+def test_l16e_a_wait_is_not_looked_at_again(monkeypatch, tmp_path):
+    """The classifier's wait is its own second look: the step after it decides at once."""
+    world = World(
+        [
+            Page(name="home", items=["Home", "Tickets"], url="https://example.com/", on={"click:Tickets": "tickets"}),
+            Page(name="tickets", items=["Buy", "Terms"], url="https://example.com/tickets", loads_in=2),
+        ]
+    )
+    policy = scripted(("click_item", "Tickets"), ("wait", None), ("wait", None), ("done", None))
+
+    state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path)
+
+    assert state.outcome == "done"
+    looked = [json.loads((tmp_path / "run" / f"step-00{n}-answers.json").read_text())["looked_again"] for n in (2, 3, 4)]
+    assert looked == [None, None, None]
 
 
 def test_l17_low_confidence_stops_the_run(monkeypatch, tmp_path):

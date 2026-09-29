@@ -9,7 +9,7 @@ from pathlib import Path
 
 from typesafe_sdk import TypeSafeClient
 
-from .actions import Context, perform
+from .actions import WAIT_SECONDS, Context, perform
 from .calls import Calls, MeteredClassifier, MeteredWriter
 from .config import DEFAULT_DELAY, DEFAULT_HANDOFFS, DEFAULT_MIN_CONFIDENCE, DEFAULT_STEPS, MAX_OPTIONS
 from .decide import Decision, decide, offscreen_records
@@ -22,9 +22,11 @@ from .writer import Answer, WriterError, compose_answer
 
 # Two ways a run stalls, both read off the screen rather than off the history line, because an
 # action's description says what was attempted and only the next capture says what came of it.
-MAX_IDLE = 3  # consecutive actions that left the screen as it was: refusals, waits on a spinner, scrolls at the bottom
+MAX_IDLE = 3  # consecutive actions that left the screen as it was: refusals, scrolls at the bottom, waits past MAX_WAITS
+MAX_WAITS = 3  # waits in a row the idle count leaves out: a screen that stays the same over one is still loading
 MAX_REPEATS = 2  # consecutive actions already taken on the same screen earlier in the run: a cycle, or a click that does nothing
 MAX_STALLS = 3  # stalls with no new page between them; the last is final, since two focuses from the writer did not free the run
+UNDRAWN = 8  # tree controls on screen the capture does not show, from which it is older than the tree; a page hides a few
 EARLIER_LINES = 600  # lines of text from the screens before the last one that the answer may also be read from
 MAX_QUESTIONS = 3  # questions the writer may put to the user in one run; an empty reply ends the asking sooner
 
@@ -80,6 +82,7 @@ class RunState:
     history: list[str] = field(default_factory=list)
     timings: list[dict[str, float]] = field(default_factory=list)
     idle: int = 0  # actions in a row that changed nothing on screen
+    waits: int = 0  # waits in a row, up to the latest action
     repeats: int = 0  # actions in a row already taken on the same screen
     stalls: int = 0  # stalls since the run last reached a page it had not been on
     pages: set[tuple[str, str | None]] = field(default_factory=set)  # every (app, URL) the run has shown
@@ -286,9 +289,12 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     timing: dict[str, float] = {}
     started = time.perf_counter()
     cache = None if cfg.replay else state.ocr_cache
-    with phase(timing, "capture"):
-        screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser, timing, ahead=cache if cfg.read_ahead else None)
-    items = perceive(screen, MAX_OPTIONS, cfg.goal, timing, cache)
+    screen, items = look(cfg, ctx, cache, timing)
+    again = look_again(cfg, state, screen, items)
+    if again is not None:
+        with phase(timing, "again"):
+            desktop.sleep_watching(WAIT_SECONDS)
+            screen, items = look(cfg, ctx, cache)
     state.view = (screen, items)
     if not screen_moved(state, screen, items, log):
         return False
@@ -310,6 +316,8 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
         f"offscreen={len(screen.offscreen)} kind={decision.kind.choice} ({decision.kind.confidence:.2f}) "
         f"site={decision.site.choice}"
     )
+    if again is not None:
+        log(f"  looked again first: {again}")
     for key, p in top(decision.kind, 4):
         log(f"  {p:5.2f}  {key}")
     if decision.item is not None:
@@ -327,7 +335,7 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     state.timings.append(timing)
 
     prefix.with_name(prefix.name + "-answers.json").write_text(
-        json.dumps(answers(decision, screen, items, timing, tried, state), indent=2), encoding="utf-8"
+        json.dumps(answers(decision, screen, items, timing, tried, state, again), indent=2), encoding="utf-8"
     )
     log(f"  files: {prefix.name}-raw.png, {prefix.name}.png, {prefix.name}-payload.txt, {prefix.name}-answers.json")
     log(format_timing(timing))
@@ -335,6 +343,37 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     if state.view is None:  # an action ran: let the screen settle before the next step, or the answer, reads it
         desktop.sleep_watching(cfg.delay)
     return keep_going
+
+
+def look(
+    cfg: RunConfig, ctx: Context, cache: OcrCache | None, timing: dict[str, float] | None = None
+) -> tuple[Screen, list[Item]]:
+    """Capture the screen and read it."""
+    with phase(timing, "capture"):
+        screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser, timing, ahead=cache if cfg.read_ahead else None)
+    return screen, perceive(screen, MAX_OPTIONS, cfg.goal, timing, cache)
+
+
+def look_again(cfg: RunConfig, state: RunState, screen: Screen, items: list[Item]) -> str | None:
+    """Why the step should look once more before it decides, or None when this capture will do.
+
+    A capture may come before the screen has caught up: in OSWorld it comes the moment the action
+    ran, before the browser has drawn what the action did, and a refused action sends nothing, so no
+    new one comes at all. So a screen the last action seems to have left as it was gets one more
+    look, a wait's worth later, before it counts as idle; so does a capture that lacks many of the
+    controls the tree, read after it, puts on screen. Once, never until the screen settles: the step
+    acts on what the second look shows. After a wait the classifier has just looked again itself, and
+    with no action since the last capture (the writer sent the classifier back to it) there is
+    nothing new to wait for.
+    """
+    acted = state.view is None  # an action made the last capture stale
+    if not cfg.act or cfg.replay or state.waits or not acted:
+        return None
+    if len(screen.undrawn) >= UNDRAWN:
+        return f"{len(screen.undrawn)} controls in the tree are not on the capture yet"
+    if state.last is not None and same_screen(signature(screen, items), state.last):
+        return "the screen is as the last action found it"
+    return None
 
 
 def resolve(
@@ -366,7 +405,9 @@ def resolve(
     state.view = None
     state.history.append(what)
     log(f"  did: {what}")
-    return not repeating(state, what, decision.kind.choice == "wait", log)
+    waiting = decision.kind.choice == "wait"
+    state.waits = state.waits + 1 if waiting else 0
+    return not repeating(state, what, waiting, log)
 
 
 def screen_moved(state: RunState, screen: Screen, items: list[Item], log: Log) -> bool:
@@ -374,15 +415,21 @@ def screen_moved(state: RunState, screen: Screen, items: list[Item], log: Log) -
 
     The capture is the only witness to what an action did. Compared with the one the action was
     taken on, an unchanged screen means a refused action, a wait on a page still loading, or a
-    scroll that has run out of page; any of them is fine a couple of times. A page the run has not
-    been on before starts the count of stalls again (see `stuck`).
+    scroll that has run out of page; any of them is fine a couple of times. The first `MAX_WAITS`
+    waits in a row are not counted: a short wait often looks again before a loading page has
+    changed, and a page still loading is not a stall. A page that never finishes still stalls,
+    `MAX_WAITS` waits later. A page the run has not been on before starts the count of stalls
+    again (see `stuck`).
     """
     now = signature(screen, items)
     if now[:2] not in state.pages:
         state.pages.add(now[:2])
         state.stalls = 0
     if state.last is not None:
-        state.idle = state.idle + 1 if same_screen(now, state.last) else 0
+        if not same_screen(now, state.last):
+            state.idle = 0
+        elif not 0 < state.waits <= MAX_WAITS:
+            state.idle += 1
     state.last = now
     if state.idle >= MAX_IDLE:
         log(f"  the last {MAX_IDLE} actions changed nothing on screen; stopping")
@@ -418,9 +465,16 @@ def repeating(state: RunState, what: str, waiting: bool, log: Log) -> bool:
 
 
 def answers(
-    decision: Decision, screen: Screen, items: list[Item], timing: dict[str, float], tried: list[str], state: RunState
+    decision: Decision,
+    screen: Screen,
+    items: list[Item],
+    timing: dict[str, float],
+    tried: list[str],
+    state: RunState,
+    looked_again: str | None = None,
 ) -> dict:
-    """What the classifier returned for this step, plus what it cost and where the stop rules stand."""
+    """What the classifier returned for this step, plus what it cost, where the stop rules stand, and
+    why the step looked twice, when it did."""
     return {
         "kind": decision.kind.choice,
         "kind_confidence": decision.kind.confidence,
@@ -438,6 +492,8 @@ def answers(
         "already_tried_on_this_screen": tried,
         "idle_actions": state.idle,
         "repeated_actions": state.repeats,
+        "waits_in_a_row": state.waits,
+        "looked_again": looked_again,
         "timing": timing,
         "items": [asdict(it) for it in items],
         "field": screen.field.record() if screen.field else None,

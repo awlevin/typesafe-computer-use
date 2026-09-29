@@ -47,7 +47,7 @@ def fixed_actions(browser: str, email: str | None) -> dict[str, str]:
         ),
         "scroll_down": "Scroll down to reveal more of the page.",
         "scroll_up": "Scroll up.",
-        "wait": "Nothing to do yet; the screen is still loading or changing.",
+        "wait": "Wait a moment: the screen is still loading or changing, and what the goal needs is not on it yet.",
         "done": "The goal is already achieved.",
         "none": "Nothing on screen or in this list helps with the goal.",
     }

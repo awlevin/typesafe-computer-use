@@ -5,15 +5,17 @@ strings, or `WAIT` / `DONE` / `FAIL`. jev's loop reads the screen and acts whene
 adapter joins the two at the step boundary:
 
 - Every input (click, key, typing, scroll) adds its pyautogui code to the step's code, as lines of
-  its own. OSWorld runs each action in the list as a step of its own, with a 2 s pause and an
-  observation after it, and hands the agent only the last observation; so the inputs between two
-  reads (empty a field, type, press Return) go out as one action.
+  its own. OSWorld runs each action in the list as a step of its own, with its fixed pause
+  (`sleep_after_execution`) and an observation after it, and hands the agent only the last
+  observation; so the inputs between two reads (empty a field, type, press Return) go out as one
+  action.
 - The first read of the screen after an input ends the step: the actions go to `next_obs`, which
   hands them to OSWorld and returns the observation taken after they ran. Reads before any input
   use the observation in hand.
-- A wait appends `WAIT`, an action of its own, which OSWorld sleeps in the VM. It never sleeps
-  here: time has to pass where the page is loading. A pause between two inputs of one step, such
-  as closing a popup and clicking what it covered, is a `time.sleep` in their code instead.
+- A pause is a `time.sleep` in the step's code: between two of its inputs, such as closing a popup
+  and clicking what it covered, or the step's whole code when a wait is all it does. It never
+  sleeps here: time has to pass where the page is loading. Nor is it OSWorld's `WAIT`, which sleeps
+  OSWorld's fixed pause, and no time at all while that pause is 0.
 
 The screenshot is the capture at scale 1.0, so a click lands on the capture's own pixels. The app,
 window, focused field, URL, and controls come from the accessibility tree, and are simply unknown
@@ -52,7 +54,6 @@ TYPE_INTERVAL = 0.02  # seconds between keystrokes in the VM
 BROWSER_WINDOW_CLASS = "google-chrome"  # the WM_CLASS wmctrl raises for the browser
 BROWSER_COMMAND = "google-chrome"  # how OSWorld's Chrome tasks start the browser
 RAISE_SECONDS = 0.5  # for the window manager to hand the raised window the keyboard
-WAIT = "WAIT"  # the action OSWorld sleeps on in the VM
 
 # macOS key names, as the loop presses them, onto pyautogui's. The Mac's delete key erases backwards.
 KEYS = {"return": "enter", "escape": "esc", "delete": "backspace"}
@@ -131,7 +132,7 @@ class OSWorldDesktop:
     def _do(self, code: str) -> None:
         """Add an input's code to the step's. A new line, not `; `, joins them: the browser's code
         branches over several lines, and code after it must run whichever way it branched."""
-        if self.actions and self.actions[-1] != WAIT:
+        if self.actions:
             self.actions[-1] += "\n" + code
         else:
             self.actions.append(code)
@@ -145,14 +146,10 @@ class OSWorldDesktop:
         return "OSWorld's step limit, or Ctrl-C on its runner"
 
     def sleep_watching(self, seconds: float) -> None:
-        """A pause between two inputs of one step goes into their code, so they stay one action. Any
-        other is `WAIT`, which OSWorld knows only as an action of its own."""
-        if seconds <= 0:
-            return
-        if self.actions and self.actions[-1] != WAIT:
+        """A pause goes into the step's code, so it passes in the VM whatever OSWorld's own pause is:
+        between two inputs, they stay one action, and a wait alone is an action of its own."""
+        if seconds > 0:
             self._do(f"time.sleep({seconds})")
-        else:
-            self.actions.append(WAIT)
 
     def accessibility_trusted(self) -> bool:
         return True

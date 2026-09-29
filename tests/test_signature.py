@@ -2,8 +2,18 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from typesafe_computer_use.decide import Decision
-from typesafe_computer_use.models import LINES_PER_DIFFERENCE, Field, same_screen, signature
-from typesafe_computer_use.runner import MAX_REPEATS, RunState, answers, earlier_screens, repeating, tried_here
+from typesafe_computer_use.models import LINES_PER_DIFFERENCE, AxNode, Field, same_screen, signature
+from typesafe_computer_use.runner import (
+    MAX_REPEATS,
+    UNDRAWN,
+    RunConfig,
+    RunState,
+    answers,
+    earlier_screens,
+    look_again,
+    repeating,
+    tried_here,
+)
 
 
 def texts(*words: str):
@@ -132,8 +142,29 @@ def test_the_step_record_carries_the_stop_rules_standing(screen, make_item):
     item = SimpleNamespace(choice="0", confidence=0.8, probabilities={"0": 0.8})
     site = SimpleNamespace(choice="none", confidence=1.0, probabilities={"none": 1.0})
     decision = Decision(kind=kind, item=item, site=site)
-    state = RunState(idle=1, repeats=0)
+    state = RunState(idle=1, repeats=0, waits=2)
     record = answers(decision, screen, [make_item(0, "Buy")], {"total": 0.5}, ["clicked 'Terms'"], state)
     assert record["already_tried_on_this_screen"] == ["clicked 'Terms'"]
-    assert record["idle_actions"] == 1 and record["repeated_actions"] == 0
+    assert record["idle_actions"] == 1 and record["repeated_actions"] == 0 and record["waits_in_a_row"] == 2
     assert record["chosen"] == "0" and record["items"][0]["text"] == "Buy"
+
+
+def test_a_capture_missing_many_of_the_trees_controls_is_looked_at_again(screen, tmp_path):
+    """A page hides a control or two; a menu the tree has and the capture does not is many more."""
+    acting = RunConfig(goal="g", out=tmp_path, act=True)
+    node = AxNode(role="AXMenuItem", label="Settings", x=0, y=0, w=10, h=10, pressable=True)
+    screen.undrawn.extend([node] * (UNDRAWN - 1))
+    assert look_again(acting, RunState(), screen, []) is None
+    screen.undrawn.append(node)
+    assert look_again(acting, RunState(), screen, []) == f"{UNDRAWN} controls in the tree are not on the capture yet"
+    assert look_again(acting, RunState(waits=1), screen, []) is None, "a wait was the second look"
+    assert look_again(RunConfig(goal="g", out=tmp_path), RunState(), screen, []) is None, "a dry run looks once"
+
+
+def test_a_step_with_no_action_since_the_last_capture_looks_once(screen, tmp_path):
+    """The writer sent the classifier back to the screen it stopped on: nothing acted, so nothing is
+    on its way to the screen."""
+    acting = RunConfig(goal="g", out=tmp_path, act=True)
+    home = signature(screen, [])
+    assert look_again(acting, RunState(last=home), screen, []) == "the screen is as the last action found it"
+    assert look_again(acting, RunState(last=home, view=(screen, [])), screen, []) is None
