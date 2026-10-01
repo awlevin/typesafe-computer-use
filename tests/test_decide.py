@@ -92,6 +92,28 @@ def test_kind_criteria_offers_email_only_when_set():
     assert "click_item" in kind_criteria("Google Chrome", None)
 
 
+def test_kind_criteria_drops_go_back_when_a_labelled_back_button_is_on_screen(make_item):
+    """Regression: in System Settings, 'click_item (Go Back)' and 'go_back' are the same move, and
+    the split read as doubt. When the screen already shows a real Back/Go Back button, go_back is
+    redundant with clicking it, so it is dropped from the kind choice."""
+    back = replace(make_item(0, "Back"), role="button", source="ax")
+    assert "go_back" not in kind_criteria("Google Chrome", None, items=[back])
+
+
+def test_kind_criteria_drops_go_back_for_a_go_back_labelled_button(make_item):
+    button = replace(make_item(0, "Go Back"), role="button", source="ax")
+    assert "go_back" not in kind_criteria("Google Chrome", None, items=[button])
+
+
+def test_kind_criteria_keeps_go_back_without_a_real_back_button(make_item):
+    assert "go_back" in kind_criteria("Google Chrome", None)
+    assert "go_back" in kind_criteria("Google Chrome", None, items=[])
+    ocr_text = make_item(0, "Back")  # text read off the screen, not a real AX control
+    assert "go_back" in kind_criteria("Google Chrome", None, items=[ocr_text])
+    other_button = replace(make_item(0, "Save"), role="button", source="ax")
+    assert "go_back" in kind_criteria("Google Chrome", None, items=[other_button])
+
+
 def test_item_criteria_and_state_carry_region_and_dates(screen, make_item):
     items = [make_item(0, "Sale ends Oct 1, 2099", y1=100, y2=130), make_item(1, "Buy", y1=140, y2=170)]
     crit = item_criteria(screen, items)

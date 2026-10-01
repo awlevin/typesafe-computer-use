@@ -13,6 +13,7 @@ from .models import AxNode, Field, Guidance, Item, Screen
 
 STOP_KINDS = ("done", "none")
 OFFSCREEN_PREFIX = "offscreen:"
+BACK_BUTTON_LABELS = {"back", "go back"}
 PRESS_OFFSCREEN = (
     "Activate a labelled control that the app exposes but that is not currently visible on screen "
     "(chosen in the offscreen question). Use when the needed control is known to exist but is "
@@ -59,11 +60,20 @@ def fixed_actions(browser: str, email: str | None) -> dict[str, str]:
     return actions
 
 
-def kind_criteria(browser: str, email: str | None, offscreen: bool = False) -> dict[str, str]:
+def has_back_button(items: list[Item]) -> bool:
+    """Whether a real, labelled Back/Go Back control is on screen. go_back is then the same move as
+    clicking it, and offering both splits the vote and reads as doubt (see CONTRIBUTING.md)."""
+    return any(it.from_ax and it.role == "button" and it.text.strip().lower() in BACK_BUTTON_LABELS for it in items)
+
+
+def kind_criteria(browser: str, email: str | None, offscreen: bool = False, items: list[Item] | None = None) -> dict[str, str]:
     clicks = {"click_item": "Click one of the on-screen text items (chosen in the item question)."}
     if offscreen:
         clicks["press_offscreen"] = PRESS_OFFSCREEN
-    return {**clicks, **fixed_actions(browser, email)}
+    actions = {**clicks, **fixed_actions(browser, email)}
+    if has_back_button(items or []):
+        actions.pop("go_back", None)
+    return actions
 
 
 ROW_MATES = 3  # how many neighbours name a duplicated item's row in a criterion; the history line takes them all
@@ -222,7 +232,7 @@ def decide(
                 "tried on this screen: each of those led straight back here."
                 + (FOCUS_RULE if guidance and guidance.focus else "")
             ),
-            criteria=kind_criteria(browser, email, bool(screen.offscreen)),
+            criteria=kind_criteria(browser, email, bool(screen.offscreen), items),
         ),
         "site": Choice(
             instructions=(
