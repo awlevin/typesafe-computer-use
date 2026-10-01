@@ -40,28 +40,36 @@ def test_region_is_the_whole_capture_without_a_window():
     assert ocr_region(screen_with(None)) == (0.0, 0.0, 2000.0, 1200.0)
 
 
-def test_region_covers_the_window_with_a_margin_and_the_menu_bar():
-    # window 100..500 pt vertically, scale 2, so 200..1000 px, plus an 8 pt margin below it
+def test_region_covers_the_window_with_a_margin():
+    # window 100..500 pt vertically, scale 2, so 200..1000 px, plus an 8 pt margin all around
     region = ocr_region(screen_with((50.0, 100.0, 600.0, 400.0)))
-    assert region == ((50.0 - 8.0) * 2, 0.0, (50.0 + 600.0 + 8.0) * 2, (100.0 + 400.0 + 8.0) * 2)
+    assert region == (
+        (50.0 - 8.0) * 2,
+        (100.0 - 8.0) * 2,
+        (50.0 + 600.0 + 8.0) * 2,
+        (100.0 + 400.0 + 8.0) * 2,
+    )
 
 
-def test_region_clips_the_menu_bar_strip_to_the_window_columns():
-    """The strip reaches the top of the display but never past the window's own sides."""
+def test_region_clips_to_the_window_columns():
+    """The region never reaches past the window's own sides."""
     region = ocr_region(screen_with((300.0, 200.0, 400.0, 300.0)))
     assert region[0] == (300.0 - 8.0) * 2 and region[2] == (300.0 + 400.0 + 8.0) * 2
-    assert region[1] == 0.0  # up to the menu bar
     assert region[2] < 2000.0  # the clock and the menu extras to the right go unread
 
 
-def test_region_reaches_the_menu_bar_even_for_a_window_low_on_the_display():
+def test_region_does_not_reach_above_a_window_low_on_the_display():
+    """Regression for the 5K repro: a Finder window far below the menu bar must not pull in
+    whatever is above it in those columns (a full-screen terminal, in the report). The menu bar's
+    own items still arrive through the accessibility tree as AXMenuBarItem controls."""
     region = ocr_region(screen_with((50.0, 400.0, 600.0, 100.0)))
-    assert region[1] == 0.0  # the menu bar strip is always read
+    assert region[1] == (400.0 - 8.0) * 2  # starts at the window's own top, not the display's
 
 
-def test_region_is_at_least_the_menu_bar_strip_for_a_window_above_it():
+def test_region_is_just_the_window_with_margin_for_a_window_near_the_top():
     region = ocr_region(screen_with((50.0, 0.0, 600.0, 10.0)))
-    assert region[3] == perception.MENU_BAR_PT * 2
+    assert region[1] == 0.0  # clamped, the margin above would go off-screen
+    assert region[3] == (0.0 + 10.0 + 8.0) * 2
 
 
 def test_region_clamps_a_window_larger_than_the_display():
