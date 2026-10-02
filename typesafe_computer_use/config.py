@@ -16,6 +16,9 @@ DEFAULT_HANDOFFS = 10  # each one is a call to the answer model, a few seconds a
 DEFAULT_WRITER_MODEL = "claude-haiku-4-5"
 DEFAULT_ANSWER_MODEL = "claude-sonnet-5"  # runs only when the classifier stops, on a screenshot: worth a stronger reader
 DEFAULT_BROWSER = "Google Chrome"
+DEFAULT_STT = "macos"  # Apple Speech / Dictation; set CLICKER_STT=openai for cloud
+DEFAULT_HOTKEY = "right_option"
+DEFAULT_VOICE_STEPS = 20
 ANTHROPIC_HOST = "api.anthropic.com"
 WRITER_APIS = ("anthropic", "openai")
 
@@ -112,3 +115,18 @@ def answer_reasoning() -> str | None:
 
 def email() -> str | None:
     return os.environ.get("CLICKER_EMAIL") or None
+
+
+def stt_provider() -> str:
+    return os.environ.get("CLICKER_STT", DEFAULT_STT).strip().lower()
+
+
+def hotkey() -> str:
+    return os.environ.get("CLICKER_HOTKEY", DEFAULT_HOTKEY).strip().lower()
+
+
+def voice_steps() -> int:
+    raw = os.environ.get("CLICKER_VOICE_STEPS")
+    if raw is None:
+        return DEFAULT_VOICE_STEPS
+    return int(raw)

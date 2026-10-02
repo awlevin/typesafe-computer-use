@@ -74,14 +74,18 @@ cp .env.example .env     # fill in the keys
 | `ANTHROPIC_API_KEY` | no | `type_text`, writer-proposed URLs, and the final answer |
 | `CLICKER_EMAIL` | no | enables the `type_email` action |
 | `CLICKER_BROWSER` | no | defaults to `Google Chrome` |
+| `CLICKER_STT` | no | `macos` (default Apple Dictation) or `openai` for `clicker-listen` |
+| `CLICKER_HOTKEY` | no | hold-to-speak key; defaults to `right_option` |
+| `CLICKER_VOICE_STEPS` | no | max clicker steps for a spoken screen goal; defaults to `20` |
 
-`.env` lives at the repo root and is read by every entry point (`clicker`, `clicker-inspect`).
-To run the writer on another model or endpoint (LM Studio, Ollama, any OpenAI-compatible
-server), see [writer endpoints](docs/writer-endpoints.md).
+`.env` lives at the repo root and is read by every entry point (`clicker`, `clicker-inspect`,
+`clicker-listen`). To run the writer on another model or endpoint (LM Studio, Ollama, any
+OpenAI-compatible server), see [writer endpoints](docs/writer-endpoints.md).
 
 Grant your terminal **Screen Recording** and **Accessibility** in System Settings >
 Privacy & Security. Without the first, captures are wallpaper. Without the second,
-synthetic clicks are silently dropped, and `--act` refuses to start.
+synthetic clicks are silently dropped, and `--act` / `clicker-listen` refuse to start.
+For voice, also grant **Microphone** and **Speech Recognition**.
 
 ## First run
 
@@ -91,14 +95,20 @@ uv run clicker "open the Playground" --act           # drives the machine, up to
 uv run clicker "log in" --act --steps 20 --delay 3   # longer and slower
 uv run clicker "log in" --act --handoffs 0           # the classifier alone: its first stop ends the run
 uv run clicker-inspect "any goal"                    # 3-2-1, capture, open the annotated screen + payload
+uv run clicker-listen                                # hold Right Option, speak, release (macOS)
 ```
 
 Clear the terminal first. It is on screen, so its text is OCR input.
 
 To stop a live run, press Ctrl-C in the terminal or slam the mouse into the top-left corner of
-the screen. The loop also stops itself on `done`, low confidence, a stall, or the step limit,
-and the writer then reads the screen and prints the answer. Every run writes
-`runs/<timestamp>/`, so a stall can be [replayed offline](docs/run-folder.md).
+the screen (or press the `clicker-listen` hotkey during a spoken screen goal). The loop also
+stops itself on `done`, low confidence, a stall, or the step limit, and the writer then reads
+the screen and prints the answer. Every run writes `runs/<timestamp>/`, so a stall can be
+[replayed offline](docs/run-folder.md).
+
+**Spoken control.** `clicker-listen` stays running with no app window. Hold the hotkey while
+you speak; release to stop. Live Apple Dictation runs during the hold. Short commands like
+"open Spotify" or "quit Notes" use `open -a` / AppleScript. Everything else is a clicker goal.
 
 ## How a step works
 

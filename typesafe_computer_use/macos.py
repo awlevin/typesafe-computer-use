@@ -7,8 +7,10 @@ walk itself lives in ax_walk.py, shared by both.
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from functools import partial
@@ -24,7 +26,19 @@ from .config import ABORT_CORNER_PX
 from .models import Abort, AxNode, Field
 
 KEYCODES = {"return": 36, "tab": 48, "escape": 53, "a": 0, "delete": 51, "[": 33}
+# Named hotkeys for clicker-listen. Option keys are modifiers (flagsChanged, not keyDown).
+HOTKEY_CODES = {
+    "right_option": 61,
+    "left_option": 58,
+    "f5": 96,
+    "f6": 97,
+    "f7": 98,
+    "f8": 100,
+}
+MODIFIER_HOTKEYS = frozenset({"right_option", "left_option"})
 MIN_WINDOW_SIDE_PT = 50.0  # anything smaller is a palette or a shadow, not the window being worked in
+
+_abort_flag = threading.Event()
 
 # ------------------------------------------------------------------ escape hatch
 
@@ -34,14 +48,26 @@ def mouse_location() -> tuple[float, float]:
     return loc.x, loc.y
 
 
+def request_abort() -> None:
+    """Ask the clicker loop to stop (voice hotkey). Cleared when check_abort raises."""
+    _abort_flag.set()
+
+
+def clear_abort() -> None:
+    _abort_flag.clear()
+
+
 def check_abort() -> None:
+    if _abort_flag.is_set():
+        _abort_flag.clear()
+        raise Abort("hotkey abort")
     x, y = mouse_location()
     if x <= ABORT_CORNER_PX and y <= ABORT_CORNER_PX:
         raise Abort("mouse in top-left corner")
 
 
 def abort_hint() -> str:
-    return "Ctrl-C, or slam the mouse into the top-left corner"
+    return "Ctrl-C, slam the mouse into the top-left corner, or press the clicker-listen hotkey"
 
 
 def sleep_watching(seconds: float) -> None:
@@ -53,6 +79,92 @@ def sleep_watching(seconds: float) -> None:
 
 def accessibility_trusted() -> bool:
     return bool(AS.AXIsProcessTrusted())
+
+
+def _escape_applescript(text: str) -> str:
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def notify(title: str, message: str = "") -> None:
+    """A short banner so the user knows the listener heard them without a terminal on screen."""
+    script = f'display notification "{_escape_applescript(message)}" with title "{_escape_applescript(title)}"'
+    subprocess.run(["osascript", "-e", script], check=False, capture_output=True)
+
+
+def beep() -> None:
+    subprocess.run(["afplay", "/System/Library/Sounds/Tink.aiff"], check=False, capture_output=True)
+
+
+def run_hotkey_tap(
+    hotkey: str,
+    on_press: Callable[[], None],
+    on_release: Callable[[], None] | None = None,
+) -> None:
+    """Block forever, calling on_press / on_release for hold-to-speak.
+
+    Needs Accessibility (or Input Monitoring) so the tap can see key events from other apps.
+    Option keys are modifiers: macOS delivers them as flagsChanged, not keyDown/keyUp.
+    """
+    keycode = HOTKEY_CODES.get(hotkey)
+    if keycode is None:
+        raise ValueError(f"unknown hotkey {hotkey!r}; choose one of {sorted(HOTKEY_CODES)}")
+    is_modifier = hotkey in MODIFIER_HOTKEYS
+    was_down = False
+
+    def _fire(callback: Callable[[], None] | None) -> None:
+        if callback is None:
+            return
+        with contextlib.suppress(Exception):
+            callback()
+
+    def callback(proxy, event_type, event, refcon):
+        nonlocal was_down
+        if event_type in (Quartz.kCGEventTapDisabledByTimeout, Quartz.kCGEventTapDisabledByUserInput):
+            Quartz.CGEventTapEnable(tap, True)
+            return event
+        code = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
+        if is_modifier and event_type == Quartz.kCGEventFlagsChanged and code == keycode:
+            down = bool(Quartz.CGEventGetFlags(event) & Quartz.kCGEventFlagMaskAlternate)
+            if down and not was_down:
+                was_down = True
+                _fire(on_press)
+            elif not down and was_down:
+                was_down = False
+                _fire(on_release)
+            return event
+        if not is_modifier and code == keycode:
+            if event_type == Quartz.kCGEventKeyDown and not was_down:
+                was_down = True
+                _fire(on_press)
+                return None
+            if event_type == Quartz.kCGEventKeyUp and was_down:
+                was_down = False
+                _fire(on_release)
+                return None
+        return event
+
+    mask = (
+        Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged)
+        | Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
+        | Quartz.CGEventMaskBit(Quartz.kCGEventKeyUp)
+    )
+    tap = Quartz.CGEventTapCreate(
+        Quartz.kCGSessionEventTap,
+        Quartz.kCGHeadInsertEventTap,
+        Quartz.kCGEventTapOptionDefault,
+        mask,
+        callback,
+        None,
+    )
+    if tap is None:
+        raise RuntimeError(
+            "could not create a keyboard event tap; grant Accessibility (and Input Monitoring if prompted) "
+            "to this terminal in System Settings > Privacy & Security"
+        )
+    source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
+    Quartz.CFRunLoopAddSource(Quartz.CFRunLoopGetCurrent(), source, Quartz.kCFRunLoopCommonModes)
+    Quartz.CGEventTapEnable(tap, True)
+    Quartz.CFRunLoopRun()
 
 
 # ------------------------------------------------------------------ input
@@ -157,6 +269,26 @@ def activate(app: str, timeout: float = 3.0) -> bool:
     osascript(f'tell application "System Events" to set frontmost of process "{app}" to true')
     time.sleep(0.3)
     return frontmost_app() == app
+
+
+def open_app(app: str) -> bool:
+    """Launch (or bring forward) an app by name via `open -a`. False when macOS cannot find it."""
+    return subprocess.run(["open", "-a", app], capture_output=True, text=True, check=False).returncode == 0
+
+
+def quit_app(app: str) -> bool:
+    """Ask an app to quit. False when AppleScript cannot reach it."""
+    try:
+        osascript(f'tell application "{app}" to quit')
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def speak(text: str) -> None:
+    """Speak a short result with the system voice. Empty strings are skipped."""
+    if text.strip():
+        subprocess.run(["say", text], check=False)
 
 
 def open_url(browser: str, url: str) -> bool:
