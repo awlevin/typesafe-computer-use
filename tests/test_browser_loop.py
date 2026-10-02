@@ -149,9 +149,10 @@ def choice(key: str, confidence: float = 0.9) -> ChoiceAnswer:
 
 
 class FakeTypeSafe:
-    """The classifier, from a script of (kind, element) pairs, one per step, then done."""
+    """The classifier, from a script of (kind, element) or (kind, element, satisfied) steps,
+    one per step, then done. satisfied defaults to 0.0 when a step leaves it out."""
 
-    def __init__(self, *steps: tuple[str, str | None]):
+    def __init__(self, *steps: tuple[str, str | None] | tuple[str, str | None, float]):
         self.steps = list(steps)
         self.requests: list[dict] = []
 
@@ -159,8 +160,10 @@ class FakeTypeSafe:
         self.requests.append({"state": state, "questions": questions})
         if set(questions) == {"ok"}:  # verify_typed
             return SimpleNamespace(answers={"ok": NoulAnswer(noul=0.95)})
-        kind, element = self.steps.pop(0) if self.steps else ("done", None)
-        answers = {"kind": choice(kind), "satisfied": NoulAnswer(noul=0.0)}
+        step = self.steps.pop(0) if self.steps else ("done", None)
+        kind, element = step[0], step[1]
+        satisfied = step[2] if len(step) > 2 else 0.0
+        answers = {"kind": choice(kind), "satisfied": NoulAnswer(noul=satisfied)}
         if "element" in questions:
             answers["element"] = choice(element or "0")
         return SimpleNamespace(answers=answers)
@@ -338,6 +341,17 @@ def test_an_answer_that_lives_only_in_plain_text_reaches_done(tmp_path):
     assert ANSWER in load_step(folder.root, 1)["payload"]
     saved = json.loads((folder.root / "step-01-state.json").read_text())
     assert any(ANSWER in text for text in saved["page_text"])
+
+
+def test_a_borderline_satisfied_score_does_not_override_a_confident_click(tmp_path):
+    """satisfied at 0.5 is a coin flip. It must not end the run in place of a chosen click, with
+    no second look, the way kind == done (a real stop, reviewed like any other answer) does."""
+    browser = FakeBrowser(listing_page())
+    client = FakeTypeSafe(("click", "1", 0.5), ("done", None))
+    result, _folder = run(browser, client, tmp_path, steps=3)
+
+    assert [s.action for s in result.steps] == ["click", "done"]
+    assert result.outcome == "done"
 
 
 def test_page_text_is_evidence_separate_from_click_targets():

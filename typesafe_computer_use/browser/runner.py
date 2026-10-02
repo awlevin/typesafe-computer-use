@@ -297,7 +297,7 @@ def run_goal(
             print(step.line(), flush=True)
         history.append(f"{kind}: {detail}" + ("" if changed else " (page unchanged)"))
 
-        if kind == "done" or decision.satisfied.noul >= 0.5:
+        if kind == "done":
             result.outcome = "done"
             break
         if kind == "none":
