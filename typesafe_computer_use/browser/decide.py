@@ -13,6 +13,7 @@ from typing import Any
 
 from typesafe_sdk import Choice, ChoiceAnswer, Noul, NoulAnswer, ScoreAnswer, TypeSafeClient
 
+from ..models import Guidance
 from .perceive import Page
 
 STOP_KINDS = ("done", "none")
@@ -121,9 +122,11 @@ def base_state(
     history: list[str],
     *,
     url_catalog: dict[str, str] | None,
+    guidance: Guidance | None = None,
 ) -> dict:
     return {
         "goal": goal,
+        **(guidance.state() if guidance else {}),
         "page": {"url": page.url, "title": page.title, "viewport": f"{page.vw}x{page.vh}"},
         "previous_actions": history[-8:],
         "elements": [
@@ -155,6 +158,7 @@ def decide(
     allow_type: bool = True,
     can_write: bool = False,
     model: str | None = None,
+    guidance: Guidance | None = None,
 ) -> Decision:
     actions = available_actions(page, allow_type=allow_type, can_write=can_write)
 
@@ -181,7 +185,7 @@ def decide(
             criteria=element_criteria(page),
         )
 
-    state = base_state(goal, page, history, url_catalog=url_catalog)
+    state = base_state(goal, page, history, url_catalog=url_catalog, guidance=guidance)
     response = client.system_one(state=state, questions=questions, model=model)
     answers = response.answers
 

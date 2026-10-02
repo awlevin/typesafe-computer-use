@@ -392,3 +392,129 @@ def test_the_page_script_never_collects_what_was_typed_or_drafted():
     assert "p.isContentEditable || p.closest(SKIP)" in js
     # Still exactly one `.value` read in the whole script: a button input's own label.
     assert re.findall(r"\.value\b", js) == [".value"]
+
+
+# ------------------------------------------------------- browser writer handoff
+ANSWER_REPLY = {"achieved": True, "answer": "The Echo Parade plays Sep 19.", "focus": "", "question": ""}
+
+
+def test_done_hands_plain_page_text_to_writer_and_saves_answer(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLICKER_WRITER_VISION", "false")
+    writer = FakeWriter(ANSWER_REPLY)
+    browser = FakeBrowser(listing_page())
+    result, folder = run(browser, FakeTypeSafe(("done", None)), tmp_path, writer=writer, steps=1)
+    packet = json.loads(writer.requests[0]["messages"][0]["content"][0]["text"])
+    assert packet["screen_text_in_reading_order"] == [
+        "Upcoming shows",
+        "The Echo Parade - SEP 19 at the Fillmore, doors 8 PM",
+        "Sold out: JUN 4 at the Fox",
+    ]
+    assert isinstance(packet["screen_text_in_reading_order"][1], str)
+    assert result.answer == ANSWER_REPLY["answer"] and result.achieved
+    assert json.loads((folder.root / "run.json").read_text())["answer"] == result.answer
+    assert len(json.loads((folder.root / "step-01-review.json").read_text())) == 1
+
+
+def test_focus_returns_to_classifier_and_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLICKER_WRITER_VISION", "false")
+
+    class ScriptedWriter(FakeWriter):
+        def __init__(self):
+            super().__init__({})
+            self.replies = [
+                {"achieved": False, "answer": "Not yet", "focus": "Open Buy tickets", "question": ""},
+                ANSWER_REPLY,
+            ]
+
+        def create(self, **kwargs):
+            self.requests.append(kwargs)
+            return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(self.replies.pop(0)))])
+
+    writer = ScriptedWriter()
+    client = FakeTypeSafe(("none", None), ("done", None))
+    folder = RunFolder.create(tmp_path)
+    result = run_goal(
+        FakeBrowser(listing_page()),
+        client,
+        "find the concert date",
+        max_steps=2,
+        verbose=False,
+        writer=writer,
+        runfolder=folder,
+        max_handoffs=1,
+    )
+    assert len(client.requests) == 2 and client.requests[1]["state"]["current_focus"] == "Open Buy tickets"
+    assert result.handoffs == 1 and result.answer == ANSWER_REPLY["answer"]
+    assert json.loads((folder.root / "step-01-review.json").read_text())[0]["handed_back"]
+
+
+def test_question_goes_to_user_then_writer_gets_reply(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLICKER_WRITER_VISION", "false")
+
+    class ScriptedWriter(FakeWriter):
+        def __init__(self):
+            super().__init__({})
+            self.replies = [
+                {"achieved": False, "answer": "Need a choice", "focus": "", "question": "Which date?"},
+                {"achieved": False, "answer": "Use the chosen date", "focus": "Open Sep 19", "question": ""},
+                ANSWER_REPLY,
+            ]
+
+        def create(self, **kwargs):
+            self.requests.append(kwargs)
+            return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(self.replies.pop(0)))])
+
+    writer = ScriptedWriter()
+    asked = []
+    folder = RunFolder.create(tmp_path)
+    result = run_goal(
+        FakeBrowser(listing_page()),
+        FakeTypeSafe(("none", None), ("done", None)),
+        "find the concert date",
+        max_steps=2,
+        verbose=False,
+        writer=writer,
+        runfolder=folder,
+        ask=lambda q: asked.append(q) or "Sep 19",
+    )
+    packet = json.loads(writer.requests[1]["messages"][0]["content"][0]["text"])
+    assert asked == ["Which date?"] and packet["user_said"] == [{"asked": "Which date?", "replied": "Sep 19"}]
+    assert result.answer == ANSWER_REPLY["answer"]
+
+
+def test_disabled_or_failed_writer_has_no_answer_and_no_crash(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLICKER_WRITER_VISION", "false")
+    result, _ = run(FakeBrowser(listing_page()), FakeTypeSafe(("done", None)), tmp_path, steps=1)
+    assert result.answer == "no answer: the writer is disabled"
+    writer = FakeWriter({"bad": "reply"})
+    result, folder = run(FakeBrowser(listing_page()), FakeTypeSafe(("done", None)), tmp_path, writer=writer, steps=1)
+    assert result.answer.startswith("no answer: the writer failed")
+    assert result.outcome == "done"
+    assert "error" in json.loads((folder.root / "step-01-review.json").read_text())[0]
+
+
+def test_writer_vision_capture_is_sent_only_when_enabled(tmp_path, monkeypatch):
+    import base64
+    import io
+
+    from PIL import Image
+
+    image = Image.new("RGB", (2, 2), "white")
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    encoded = base64.b64encode(out.getvalue()).decode()
+
+    class Browser(FakeBrowser):
+        def call(self, method, params=None):
+            if method == "Page.captureScreenshot":
+                self.inputs.append((method, params or {}))
+                return {"data": encoded}
+            return super().call(method, params)
+
+    monkeypatch.setenv("CLICKER_WRITER_VISION", "true")
+    writer = FakeWriter(ANSWER_REPLY)
+    browser = Browser(listing_page())
+    result, _ = run(browser, FakeTypeSafe(("done", None)), tmp_path, writer=writer, steps=1)
+    assert result.achieved and any(method == "Page.captureScreenshot" for method, _ in browser.inputs)
+    content = writer.requests[0]["messages"][0]["content"]
+    assert content[0]["type"] == "image" and content[1]["type"] == "text"
