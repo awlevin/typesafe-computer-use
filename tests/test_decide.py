@@ -166,3 +166,28 @@ def test_the_item_question_steers_around_what_was_tried_here_as_the_kind_questio
     for key in ("kind", "item"):
         assert "already tried on this screen" in questions[key].instructions
         assert "led straight back here" in questions[key].instructions
+
+
+def test_switch_app_is_offered_only_with_windows_to_switch_to(screen):
+    asked = []
+
+    def system_one(state, questions):
+        asked.append((state, questions))
+        return SimpleNamespace(answers={"kind": answer("none", 0.9), "site": answer("none", 1.0)})
+
+    client = SimpleNamespace(system_one=system_one)
+    decide(client, "compute 6 times 7", screen, [], [], "Google Chrome", None)
+    windows = [("window:7", "the 'Calculator' window (ApplicationFrameHost.exe)"), ("launch:Notepad", "start Notepad")]
+    decide(client, "compute 6 times 7", screen, [], [], "Google Chrome", None, windows=windows)
+
+    (bare_state, bare), (state, offered) = asked
+    assert "switch_app" not in bare["kind"].criteria and "app" not in bare
+    assert "other_windows_and_apps" not in bare_state
+    assert "switch_app" in offered["kind"].criteria
+    assert offered["app"].criteria == dict(windows)
+    assert state["other_windows_and_apps"] == [d for _, d in windows]
+
+
+def test_decision_switch_app_takes_the_lower_of_kind_and_app():
+    d = Decision(kind=answer("switch_app", 0.9), item=None, site=answer("none", 1.0), app=answer("window:7", 0.6))
+    assert d.switching and d.chosen == "switch_app" and d.confidence == 0.6 and not d.stops

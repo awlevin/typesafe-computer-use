@@ -159,6 +159,15 @@ def activate(app: str, timeout: float = 3.0) -> bool:
     return frontmost_app() == app
 
 
+def windows() -> list[tuple[str, str]]:
+    """No switch_app on macOS yet: an empty list keeps the action off the menu."""
+    return []
+
+
+def switch_to(key: str, timeout: float = 3.0) -> bool:
+    return False
+
+
 def open_url(browser: str, url: str) -> bool:
     check_abort()
     osascript(f'tell application "{browser}" to open location "{url}"')

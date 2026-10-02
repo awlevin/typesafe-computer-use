@@ -17,7 +17,7 @@ DEFAULT_WRITER_MODEL = "claude-haiku-4-5"
 DEFAULT_ANSWER_MODEL = "claude-sonnet-5"  # runs only when the classifier stops, on a screenshot: worth a stronger reader
 DEFAULT_BROWSER = "Google Chrome"
 ANTHROPIC_HOST = "api.anthropic.com"
-WRITER_APIS = ("anthropic", "openai")
+WRITER_APIS = ("anthropic", "openai", "claude-code", "codex", "opencode")  # the last three: an agent CLI, see cli_writer.py
 
 # Sites the classifier can pick by name. Anything else goes through the writer.
 SITES: dict[str, str] = {
@@ -82,7 +82,7 @@ def writer_base_url() -> str | None:
 
 def custom_writer_endpoint() -> bool:
     """Whether the writer talks to anything but Anthropic's own API, by either variable."""
-    if writer_api() == "openai":
+    if writer_api() != "anthropic":
         return True
     url = writer_base_url() or os.environ.get("ANTHROPIC_BASE_URL")
     return bool(url) and urlparse(url).hostname != ANTHROPIC_HOST

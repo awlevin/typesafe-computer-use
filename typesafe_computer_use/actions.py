@@ -162,6 +162,16 @@ def _use_browser(decision: Decision, screen, items, ctx: Context) -> str:
     return f"use_browser failed: opened {url} but {ctx.browser} did not come to the front"
 
 
+def _switch_app(decision: Decision, screen, items, ctx: Context) -> str:
+    """Bring the window the app answer named to the front, starting its app first for a launch key."""
+    if decision.app is None:
+        return "switch_app refused: no window or app was offered"
+    key = decision.app.choice
+    if desktop.switch_to(key):
+        return f"switched to {key}"
+    return f"switch_app failed: {key} did not come to the front"
+
+
 def _type_email(decision, screen: Screen, items, ctx: Context) -> str:
     if not (screen.field and screen.field.is_text):
         return "type_email refused: no text field is focused"
@@ -223,6 +233,7 @@ def _wait(decision, screen, items, ctx) -> str:
 
 _HANDLERS = {
     "use_browser": _use_browser,
+    "switch_app": _switch_app,
     "type_email": _type_email,
     "type_text": _type_text,
     "press_enter": _key("return", "pressed Return"),

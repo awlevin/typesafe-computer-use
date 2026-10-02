@@ -200,6 +200,13 @@ class OSWorldDesktop:
         self._do(_browser_code(None))
         return True
 
+    def windows(self) -> list[tuple[str, str]]:
+        """No switch_app in the VM: only the browser can be brought forward there."""
+        return []
+
+    def switch_to(self, key: str, timeout: float = 3.0) -> bool:
+        return False
+
     def open_url(self, browser: str, url: str) -> bool:
         """Open `url` in the browser: in the front tab of its raised window when it runs, as the
         address bar would, or as the page it starts on when it does not."""

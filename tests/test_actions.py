@@ -354,3 +354,21 @@ def test_refused_restore_has_no_keyboard_fallback(monkeypatch):
     monkeypatch.setattr(desktop, "ax_set_value", lambda *a: False)
     monkeypatch.setattr(desktop, "clear_field", lambda: pytest.fail("must not clear the current focus"))
     assert not actions.restore_field(field(ref=object()), "new query")
+
+
+def switching(key: str) -> SimpleNamespace:
+    return SimpleNamespace(chosen="switch_app", app=SimpleNamespace(choice=key))
+
+
+def test_switch_app_brings_the_chosen_window_forward(screen, monkeypatch):
+    log = []
+    monkeypatch.setattr(desktop, "switch_to", lambda key: log.append(key) or True)
+    assert actions.perform(switching("window:7"), screen, [], context()) == "switched to window:7"
+    assert log == ["window:7"]
+
+
+def test_switch_app_reports_a_window_that_did_not_come_forward(screen, monkeypatch):
+    monkeypatch.setattr(desktop, "switch_to", lambda key: False)
+    assert actions.perform(switching("launch:Calculator"), screen, [], context()) == (
+        "switch_app failed: launch:Calculator did not come to the front"
+    )

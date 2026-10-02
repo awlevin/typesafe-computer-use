@@ -46,6 +46,16 @@ def test_keeps_labelled_controls_and_reports_no_cap():
     assert capped is False
 
 
+def test_two_bare_containers_sharing_a_frame_are_both_walked():
+    """Windows Calculator: the frame window holds an empty input-sink pane, then the content pane
+    with every button, at the same frame. Neither has a role or a label, so keying them as one
+    control dropped the content pane and the app read as three title-bar buttons."""
+    pane = (8.0, 270.0, 320.0, 500.0)
+    sink = node("", frame=pane)
+    content = node("", frame=pane, children=[node("AXButton", "Six", frame=(90.0, 600.0, 76.0, 50.0), press=True)])
+    assert labels(app(sink, content))[0] == ["Six"]
+
+
 def test_a_frameless_root_does_not_prune_the_whole_tree():
     assert labels(node("AXApplication", "Finder", frame=None, children=[node("AXButton", "Share")]))[0] == ["Share"]
 

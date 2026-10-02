@@ -97,7 +97,18 @@ def no_real_machine(monkeypatch):
             monkeypatch.setattr(macos.AS, name, refuse(f"ApplicationServices.{name}"))
     # The Windows adapter: SendInput and the cursor carry all input; the rest launch, activate,
     # open, capture, or act on another app's element.
-    for name in ("_send", "_move", "screenshot", "activate", "open_url", "open_path", "ax_press", "ax_focus", "ax_set_value"):
+    for name in (
+        "_send",
+        "_move",
+        "screenshot",
+        "activate",
+        "switch_to",
+        "open_url",
+        "open_path",
+        "ax_press",
+        "ax_focus",
+        "ax_set_value",
+    ):
         monkeypatch.setattr(windows, name, refuse(f"windows.{name}"))
     monkeypatch.setattr(windows, "mouse_location", lambda: (500.0, 500.0))
 

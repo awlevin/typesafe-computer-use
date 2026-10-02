@@ -18,6 +18,11 @@ PRESS_OFFSCREEN = (
     "(chosen in the offscreen question). Use when the needed control is known to exist but is "
     "scrolled out of view or not yet shown."
 )
+SWITCH_APP = (
+    "Bring another open window to the front, or start a common app (chosen in the app question). "
+    "Use when the goal needs a different app than the frontmost one. To reach a website, use "
+    "use_browser instead."
+)
 
 # Said only while a focus is set, so a run the writer never steered asks the question it always asked.
 FOCUS_RULE = (
@@ -59,10 +64,12 @@ def fixed_actions(browser: str, email: str | None) -> dict[str, str]:
     return actions
 
 
-def kind_criteria(browser: str, email: str | None, offscreen: bool = False) -> dict[str, str]:
+def kind_criteria(browser: str, email: str | None, offscreen: bool = False, switching: bool = False) -> dict[str, str]:
     clicks = {"click_item": "Click one of the on-screen text items (chosen in the item question)."}
     if offscreen:
         clicks["press_offscreen"] = PRESS_OFFSCREEN
+    if switching:
+        clicks["switch_app"] = SWITCH_APP
     return {**clicks, **fixed_actions(browser, email)}
 
 
@@ -168,6 +175,11 @@ class Decision:
     item: ChoiceAnswer | None
     site: ChoiceAnswer
     offscreen: ChoiceAnswer | None = None
+    app: ChoiceAnswer | None = None
+
+    @property
+    def switching(self) -> bool:
+        return self.kind.choice == "switch_app" and self.app is not None
 
     @property
     def clicking(self) -> bool:
@@ -195,6 +207,8 @@ class Decision:
             return min(self.kind.confidence, self.item.confidence)
         if self.pressing_offscreen:
             return min(self.kind.confidence, self.offscreen.confidence)
+        if self.switching:  # starting the wrong app is not undone either
+            return min(self.kind.confidence, self.app.confidence)
         return self.kind.confidence
 
     @property
@@ -212,7 +226,10 @@ def decide(
     email: str | None,
     tried: list[str] | None = None,
     guidance: Guidance | None = None,
+    windows: list[tuple[str, str]] | None = None,
 ) -> Decision:
+    """`windows` is the platform's (key, description) list of other windows and startable apps;
+    switch_app is offered only when it is not empty."""
     questions = {
         "kind": Choice(
             instructions=(
@@ -222,7 +239,7 @@ def decide(
                 "tried on this screen: each of those led straight back here."
                 + (FOCUS_RULE if guidance and guidance.focus else "")
             ),
-            criteria=kind_criteria(browser, email, bool(screen.offscreen)),
+            criteria=kind_criteria(browser, email, bool(screen.offscreen), bool(windows)),
         ),
         "site": Choice(
             instructions=(
@@ -252,8 +269,24 @@ def decide(
             ),
             criteria=offscreen_criteria(screen.offscreen),
         )
-    answers = client.system_one(state=base_state(goal, screen, items, history, tried, guidance), questions=questions).answers
-    return Decision(kind=answers["kind"], item=answers.get("item"), site=answers["site"], offscreen=answers.get("offscreen"))
+    state = base_state(goal, screen, items, history, tried, guidance)
+    if windows:
+        questions["app"] = Choice(
+            instructions=(
+                "If switching to another app is the right move, which window should come to the front, "
+                "or which app should start? Prefer an open window over starting the same app again."
+            ),
+            criteria=dict(windows),
+        )
+        state["other_windows_and_apps"] = [description for _, description in windows]
+    answers = client.system_one(state=state, questions=questions).answers
+    return Decision(
+        kind=answers["kind"],
+        item=answers.get("item"),
+        site=answers["site"],
+        offscreen=answers.get("offscreen"),
+        app=answers.get("app"),
+    )
 
 
 def verify_typed(client: TypeSafeClient, goal: str, field_before: Field, typed: str, field_after: Field | None) -> float:

@@ -359,6 +359,122 @@ def activate(app: str, timeout: float = 3.0) -> bool:
     return win32gui.GetForegroundWindow() == hwnd
 
 
+WINDOW_KEY = "window:"
+LAUNCH_KEY = "launch:"
+MAX_WINDOWS = 20  # the classifier reads every one as a criterion
+LAUNCH_SECONDS = 10.0  # a cold Store app can take this long to show its window
+DWMWA_CLOAKED = 14  # a suspended Store app keeps a visible window that is cloaked off screen
+# Apps switch_app may start when no window of theirs is open: window title -> what to run.
+LAUNCHABLE = {"Calculator": "calc.exe", "Notepad": "notepad.exe", "File Explorer": "explorer.exe", "Paint": "mspaint.exe"}
+
+
+def _cloaked(hwnd: int) -> bool:
+    value = ctypes.c_int(0)
+    with suppress(OSError):
+        ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, ctypes.byref(value), ctypes.sizeof(value))
+    return bool(value.value)
+
+
+def _switchable() -> list[tuple[int, str, str]]:
+    """(hwnd, app, title) for every window a person could Alt-Tab to, top of the z-order first.
+
+    Matched by window, not by process: a Store app such as Calculator runs inside
+    ApplicationFrameHost, so its process name says nothing and only its title names it.
+    """
+    found: list[tuple[int, str, str]] = []
+
+    def visit(hwnd, _):
+        title = win32gui.GetWindowText(hwnd)
+        if not (title and win32gui.IsWindowVisible(hwnd)) or _cloaked(hwnd):
+            return
+        if win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) & win32con.WS_EX_TOOLWINDOW:
+            return
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        # A minimized window reports a stub rect far off screen; it is still one to switch to.
+        if not win32gui.IsIconic(hwnd) and min(right - left, bottom - top) < MIN_WINDOW_SIDE_PT:
+            return
+        found.append((hwnd, display_name(_process_name(_window_pid(hwnd))), title))
+
+    win32gui.EnumWindows(visit, None)
+    return found
+
+
+def windows() -> list[tuple[str, str]]:
+    """(key, description) for switch_app: the open windows behind the frontmost one, then the
+    LAUNCHABLE apps that have no window yet. The key is what switch_to takes."""
+    front = win32gui.GetForegroundWindow()
+    found = [(h, app, title) for h, app, title in _switchable() if h != front][:MAX_WINDOWS]
+    titles = {title for _, _, title in found} | {win32gui.GetWindowText(front)}
+    return [(f"{WINDOW_KEY}{h}", f"the {title!r} window ({app})") for h, app, title in found] + [
+        (f"{LAUNCH_KEY}{name}", f"start {name}") for name in LAUNCHABLE if name not in titles
+    ]
+
+
+def _bring_forward(hwnd: int, timeout: float) -> bool:
+    """Put a window in front and confirm it got there.
+
+    Windows ignores SetForegroundWindow from a process that is not in front, which is every
+    process an agent runs from. Two standard workarounds, in order: share input state with the
+    thread that owns the foreground, then an Alt tap, which counts as this process's own input.
+    """
+    if win32gui.IsIconic(hwnd):
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+    _onto_primary(hwnd)
+    user32 = ctypes.windll.user32
+    for attempt in ("attach", "alt"):
+        check_abort()
+        mine = win32api.GetCurrentThreadId()
+        theirs = user32.GetWindowThreadProcessId(win32gui.GetForegroundWindow(), None)
+        attached = attempt == "attach" and theirs != mine and user32.AttachThreadInput(mine, theirs, True)
+        if attempt == "alt":
+            _send(_key(VK_ALT))
+            _send(_key(VK_ALT, flags=KEYEVENTF_KEYUP))
+        try:
+            with suppress(Exception):  # refused focus is what the check below reports
+                win32gui.BringWindowToTop(hwnd)
+                win32gui.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                user32.AttachThreadInput(mine, theirs, False)
+        end = time.monotonic() + timeout / 2
+        while time.monotonic() < end:
+            if win32gui.GetForegroundWindow() == hwnd:
+                return True
+            time.sleep(0.1)
+    return False
+
+
+def _onto_primary(hwnd: int) -> None:
+    """Slide a window onto the primary monitor, the only one captured, keeping its size. A window
+    larger than the monitor lands at its top-left corner."""
+    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+    width, height = win32api.GetSystemMetrics(win32con.SM_CXSCREEN), win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+    x, y = max(0, min(left, width - (right - left))), max(0, min(top, height - (bottom - top)))
+    if (x, y) != (left, top):
+        win32gui.SetWindowPos(hwnd, 0, x, y, 0, 0, win32con.SWP_NOSIZE | win32con.SWP_NOZORDER)
+
+
+def switch_to(key: str, timeout: float = 3.0) -> bool:
+    """Bring forward the window a `windows()` key names, starting its app first for a launch key,
+    and move it onto the primary monitor when it is elsewhere."""
+    check_abort()
+    if key.startswith(LAUNCH_KEY):
+        name = key.removeprefix(LAUNCH_KEY)
+        if name not in LAUNCHABLE:
+            return False
+        subprocess.Popen([LAUNCHABLE[name]])
+        end = time.monotonic() + LAUNCH_SECONDS
+        hwnd = None
+        while hwnd is None and time.monotonic() < end:
+            sleep_watching(0.25)
+            hwnd = next((h for h, _, title in _switchable() if title == name), None)
+        return hwnd is not None and _bring_forward(hwnd, timeout)
+    if key.startswith(WINDOW_KEY) and key.removeprefix(WINDOW_KEY).isdigit():
+        hwnd = int(key.removeprefix(WINDOW_KEY))
+        return bool(win32gui.IsWindow(hwnd)) and _bring_forward(hwnd, timeout)
+    return False
+
+
 def open_url(browser: str, url: str) -> bool:
     exe = next((exe for name, exe in BROWSER_EXES.items() if name.lower() == browser.strip().lower()), None)
     if exe and shutil.which(exe):
