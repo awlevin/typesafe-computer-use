@@ -3,23 +3,31 @@
 OSWorld files each task under `<results>/<action_space>/<observation_type>/<model>/<domain>/<task_id>/`:
 `result.txt` holds the score and `traj.jsonl` one line per action, with its time. jev adds its own
 run folder there, `jev/`, whose `run.json` holds jev's outcome, its tokens per model, and what the
-run ran on: the OCR backend, OSWorld's provider, and the machine's architecture. The Luna runner
-writes `usage.json` there instead, with its tokens in the same shape (see `usage.py`).
+run ran on: the OCR backend, OSWorld's provider, the machine's architecture, and where the
+accessibility tree came from, with how many of jev's own fetches fell back to OSWorld's. The Luna runner
+writes `usage.json` there instead, with its tokens in the same shape, the seconds its model took,
+and the settings it ran with, such as the reasoning effort (see `usage.py`).
 
-`scripts/osworld results` prints this. It reads files only, so it runs anywhere, with no OSWorld
-checkout. Earlier runs that `scripts/osworld` moved aside live under `<results>/archive/` and are
-left out; point it at one of those folders to read an earlier run.
+`scripts/osworld results` prints this, and after it a summary per agent: its means over the tasks it
+solved and, apart, over the tasks it failed, since a run stuck until the step limit skews a mean
+over both, and how long a failed run took to end. It reads files only, so it runs anywhere, with no
+OSWorld checkout. Earlier runs that `scripts/osworld` moved aside live under `<results>/archive/` and
+are left out; point it at one of those folders to read an earlier run.
 
     python -m typesafe_computer_use.osworld.results [results folder]
 """
 
 from __future__ import annotations
 
+import itertools
 import json
+import statistics
 import sys
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 from .usage import USAGE_FILE
@@ -48,6 +56,17 @@ class Jev:
     provider: str | None
     architecture: str | None
     usage: dict[str, Usage] = field(default_factory=dict)
+    tree: str | None = None  # "jev-light" when jev fetched its own trees, "osworld" when they came with the observations
+    tree_fallbacks: int | None = None  # jev's own fetches that OSWorld's fetch stood in for
+
+
+@dataclass(frozen=True)
+class UsageFile:
+    """What an agent that is not jev says about its task in usage.json."""
+
+    usage: dict[str, Usage] = field(default_factory=dict)
+    seconds: float | None = None  # the model's time only, not the task's
+    settings: dict[str, str] = field(default_factory=dict)  # what the model ran with, such as its reasoning effort
 
 
 @dataclass(frozen=True)
@@ -65,6 +84,8 @@ class TaskResult:
     errors: list[str]
     jev: Jev | None  # None for an agent that is not jev
     usage: dict[str, Usage] = field(default_factory=dict)  # tokens per model: jev's run.json, or usage.json
+    model_seconds: float | None = None  # usage.json's model time; None for jev, whose run.json times the whole run
+    settings: dict[str, str] = field(default_factory=dict)  # usage.json's settings, such as the reasoning effort
 
 
 def read(root: Path) -> list[TaskResult]:
@@ -86,6 +107,7 @@ def task(folder: Path) -> TaskResult:
     score = score_file.read_text(encoding="utf-8").strip() if score_file.is_file() else None
     steps, actions, seconds, errors = _trajectory(folder / "traj.jsonl")
     jev = _jev(folder / RUN_FOLDER / "run.json")
+    own = _usage_file(folder / USAGE_FILE) if jev is None else UsageFile()
     return TaskResult(
         folder=folder,
         action_space=action_space,
@@ -99,7 +121,9 @@ def task(folder: Path) -> TaskResult:
         seconds=seconds,
         errors=errors,
         jev=jev,
-        usage=jev.usage if jev is not None else _usage_file(folder / USAGE_FILE),
+        usage=jev.usage if jev is not None else own.usage,
+        model_seconds=own.seconds,
+        settings=own.settings,
     )
 
 
@@ -136,6 +160,7 @@ def _jev(path: Path) -> Jev | None:
         return Jev(outcome="run.json is not valid JSON", seconds=None, ocr=None, provider=None, architecture=None)
     osworld = summary.get("osworld") or {}
     usage = _usage(summary)
+    fallbacks = osworld.get("tree_fallbacks")
     return Jev(
         outcome=summary.get("outcome"),
         seconds=summary.get("seconds"),
@@ -143,6 +168,8 @@ def _jev(path: Path) -> Jev | None:
         provider=osworld.get("provider"),
         architecture=osworld.get("architecture"),
         usage=usage,
+        tree=osworld.get("tree"),
+        tree_fallbacks=fallbacks if isinstance(fallbacks, int) else None,
     )
 
 
@@ -153,12 +180,18 @@ def _usage(summary: dict) -> dict[str, Usage]:
     }
 
 
-def _usage_file(path: Path) -> dict[str, Usage]:
+def _usage_file(path: Path) -> UsageFile:
     """An agent's own usage.json, for an agent that is not jev; empty when it wrote none."""
     try:
-        return _usage(json.loads(path.read_text(encoding="utf-8")))
+        summary = json.loads(path.read_text(encoding="utf-8"))
+        seconds = summary.get("seconds")
+        return UsageFile(
+            usage=_usage(summary),
+            seconds=float(seconds) if isinstance(seconds, int | float) else None,
+            settings={str(name): str(value) for name, value in (summary.get("settings") or {}).items()},
+        )
     except (OSError, json.JSONDecodeError, AttributeError):
-        return {}
+        return UsageFile()
 
 
 def duration(seconds: float) -> str:
@@ -187,7 +220,17 @@ def describe(result: TaskResult) -> list[str]:
         ended = jev.outcome or "no outcome"
         if jev.seconds is not None:
             ended += f" after {duration(jev.seconds)}"
-        row("jev", f"{ended}; ocr {jev.ocr}, provider {jev.provider}, architecture {jev.architecture}")
+        tree = ""
+        if jev.tree is not None:
+            tree = f", tree {jev.tree}"
+            if jev.tree_fallbacks:
+                tree += f" ({jev.tree_fallbacks} fell back to OSWorld's fetch)"
+        row("jev", f"{ended}; ocr {jev.ocr}, provider {jev.provider}, architecture {jev.architecture}{tree}")
+    agent = [f"{name} {value}" for name, value in sorted(result.settings.items())]
+    if result.model_seconds is not None:
+        agent.insert(0, f"{duration(result.model_seconds)} of model time")
+    if agent:
+        row("agent", "; ".join(agent))
     label = "tokens"
     for model, used in sorted(result.usage.items()):
         reasoning = f" ({used.reasoning_tokens:,} reasoning)" if used.reasoning_tokens else ""
@@ -201,6 +244,76 @@ def describe(result: TaskResult) -> list[str]:
     return lines
 
 
+def solved(result: TaskResult) -> bool | None:
+    """Whether OSWorld scored the task done: a score of 1 or more is solved, below 1 failed, and a task
+    with no score, or one that is not a number, is None."""
+    if result.score is None:
+        return None
+    try:
+        return float(result.score) >= 1
+    except ValueError:
+        return None
+
+
+TOKENS = {"input_tokens": "in", "cached_input_tokens": "cached in", "output_tokens": "out", "reasoning_tokens": "reasoning"}
+
+
+def _tokens(result: TaskResult, model: str, name: str) -> int | None:
+    """One count of a model's tokens in a task: 0 when the task did not call that model, and None when
+    the task recorded no tokens at all."""
+    return getattr(result.usage.get(model, Usage()), name) if result.usage else None
+
+
+def _mean(values: list, show: Callable[[float], str]) -> str:
+    """The mean of the values that are known, with how many those are when some are not."""
+    known = [value for value in values if value is not None]
+    if not known:
+        return "-"
+    text = show(sum(known) / len(known))
+    return text if len(known) == len(values) else f"{text} ({len(known)} of {len(values)})"
+
+
+def summarize(results: list[TaskResult]) -> list[str]:
+    """One agent's tasks as a few lines: the means over the tasks it solved and, apart, over those it
+    failed, since a run stuck until the step limit skews a mean over both, and the median time a
+    failed task took to end. A task with no score is listed, not counted."""
+    won = [r for r in results if solved(r) is True]
+    lost = [r for r in results if solved(r) is False]
+    unscored = [r for r in results if solved(r) is None]
+    lines = [
+        f"{results[0].model}  summary of {len(results)} task{'' if len(results) == 1 else 's'}: "
+        f"{len(won)} solved, {len(lost)} failed, {len(unscored)} not scored"
+    ]
+    table = [("mean per task", f"solved ({len(won)})", f"failed ({len(lost)})")]
+
+    def row(label: str, value: Callable[[TaskResult], float | None], show: Callable[[float], str]) -> None:
+        groups = [[value(r) for r in group] for group in (won, lost)]
+        known = [v for group in groups for v in group if v is not None]
+        if known and (any(known) or not label.endswith(" reasoning")):
+            table.append((label, *(_mean(group, show) for group in groups)))
+
+    row("steps", lambda r: r.steps, "{:.1f}".format)
+    row("first to last action", lambda r: r.seconds, duration)
+    # jev's run.json times its whole run; another agent's usage.json times its model's replies only.
+    agent_time = "jev's run time" if any(r.jev is not None for r in results) else "model time only"
+    row(agent_time, lambda r: r.jev.seconds if r.jev is not None else r.model_seconds, duration)
+    for model in sorted({model for r in won + lost for model in r.usage}):
+        for name, label in TOKENS.items():
+            row(f"{model} {label}", partial(_tokens, model=model, name=name), "{:,.0f}".format)
+    if won or lost:
+        widths = [max(len(cells[i]) for cells in table) for i in range(3)]
+        for label, *cells in table:
+            lines.append(f"  {label:<{widths[0]}}" + "".join(f"   {c:>{w}}" for c, w in zip(cells, widths[1:], strict=True)))
+    to_failure = [r.seconds for r in lost if r.seconds is not None]
+    if to_failure:
+        lines.append(f"  median time to failure: {duration(statistics.median(to_failure))}, from the first action to the last")
+    label = "not scored"
+    for r in unscored:
+        lines.append(f"  {label:<12} {r.domain}/{r.task_id}")
+        label = ""
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if len(args) > 1:
@@ -211,7 +324,9 @@ def main(argv: list[str] | None = None) -> int:
     if not results:
         print(f"no OSWorld results under {root}")
         return 0
-    print("\n\n".join("\n".join(describe(r)) for r in results))
+    blocks = [describe(r) for r in results]
+    blocks += [summarize(list(tasks)) for _, tasks in itertools.groupby(results, key=lambda r: r.model)]
+    print("\n\n".join("\n".join(block) for block in blocks))
     return 0
 
 

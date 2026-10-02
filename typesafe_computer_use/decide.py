@@ -89,8 +89,8 @@ def row_mates(items: list[Item], limit: int | None = ROW_MATES) -> dict[int, lis
 
 
 def item_criteria(screen: Screen, items: list[Item]) -> dict[str, str]:
-    """Each item as one line. A role prefix marks the ones the app itself declared, and a
-    duplicated label carries its row."""
+    """Each item as one line. A role prefix marks the ones the app itself declared, a
+    duplicated label carries its row, and one under a popup says which."""
     hints = date_hints(items, screen)
     mates = row_mates(items)
     return {
@@ -98,7 +98,8 @@ def item_criteria(screen: Screen, items: list[Item]) -> dict[str, str]:
             f"{it.role + ' ' if it.from_ax and it.role else ''}{it.text!r} "
             f"({screen.region(it)}"
             f"{'; ' + hints[it.index] if it.index in hints else ''}"
-            f"{'; in the row of ' + ', '.join(repr(t) for t in mates[it.index]) if it.index in mates else ''})"
+            f"{'; in the row of ' + ', '.join(repr(t) for t in mates[it.index]) if it.index in mates else ''}"
+            f"{'; under ' + screen.covered[it.index].title if it.index in screen.covered else ''})"
         )
         for it in items
     }
@@ -153,6 +154,7 @@ def base_state(
                 **({"role": it.role} if it.role else {}),
                 **({"when": hints[it.index]} if it.index in hints else {}),
                 **({"beside": mates[it.index]} if it.index in mates else {}),
+                **({"under": screen.covered[it.index].title} if it.index in screen.covered else {}),
             }
             for it in items
         ],
@@ -236,7 +238,8 @@ def decide(
             instructions=(
                 "If clicking an on-screen item is the right move, which item? Items marked with a "
                 "role come from the app's accessibility tree and are real controls; plain items are "
-                "text read from the screen."
+                "text read from the screen. Never pick an item that an action listed as already tried "
+                "on this screen clicked or pressed: each of those led straight back here."
             ),
             criteria=item_criteria(screen, items),
         )

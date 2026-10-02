@@ -44,6 +44,11 @@ def test_format_line_says_one_rect_in_the_singular():
     assert format_timing({"ocr": 0.31, "ocr_region_pct": 8.0, "ocr_rects": 1}) == "  timing: ocr 0.31s (8% of screen, 1 rect)"
 
 
+def test_format_line_says_how_long_a_read_made_ahead_took_on_its_own_thread():
+    line = format_timing({"ocr": 0.02, "ocr_region_pct": 8.0, "ocr_rects": 1, "ocr_ahead": 0.61, "total": 0.9})
+    assert line == "  timing: ocr 0.02s (8% of screen, 1 rect, read ahead in 0.61s)  total 0.90s"
+
+
 def test_format_line_omits_act_when_the_step_did_not_act():
     assert "act" not in format_timing({"capture": 0.3, "ocr": 0.8, "decide": 0.2, "act": 0.0, "total": 1.3})
 

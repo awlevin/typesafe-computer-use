@@ -65,7 +65,12 @@ def describe_offset(d: date, today: date | None = None) -> str:
 
 
 def date_hints(items: list[Item], screen: Screen, today: date | None = None) -> dict[int, str]:
-    """Item index -> 'dated ...' for items containing a date, or 'near a line dated ...' for close neighbours."""
+    """Item index -> 'dated ...' for items containing a date, or 'near a line dated ...' for close neighbours.
+
+    The menu bar strip takes no part. Its clock is a date, and it would date every tab and button
+    under it as near a line dated today: noise, and in OSWorld's Chrome tasks 7% of every request.
+    """
+    items = [it for it in items if not screen.in_menu_bar(it)]
     dated = {it.index: d for it in items if (d := first_date(it.text, today)) is not None}
     hints = {i: f"dated {describe_offset(d, today)}" for i, d in dated.items()}
     if not dated:

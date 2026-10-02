@@ -5,6 +5,7 @@ from typesafe_computer_use.config import SITES
 from typesafe_computer_use.decide import (
     Decision,
     base_state,
+    decide,
     item_criteria,
     kind_criteria,
     offscreen_criteria,
@@ -145,3 +146,23 @@ def test_guidance_reaches_the_state_only_when_there_is_some(screen, make_item):
     assert state["current_focus"] == "Click '15 inch'"
     assert state["user_said"] == [{"asked": "13 or 15 inch?", "replied": "15"}]
     assert list(state)[:3] == ["goal", "current_focus", "user_said"]  # beside the goal they refine
+
+
+def test_the_item_question_steers_around_what_was_tried_here_as_the_kind_question_does(screen, make_item):
+    """bb5e4c0d clicked 'Microsoft Bing' three times running. The click selected Bing's radio and
+    changed no text, so each one led back to the same screen and joined the tried list, but only the
+    kind question was told to steer around that list, and the item question chose Bing every time."""
+    asked = []
+
+    def system_one(state, questions):
+        asked.append(questions)
+        return SimpleNamespace(answers={"kind": answer("click_item", 0.9), "item": answer("1", 0.9), "site": answer("none", 1.0)})
+
+    items = [make_item(0, "Microsoft Bing"), make_item(1, "Set as default", y1=200, y2=230)]
+    tried = ["clicked 'Microsoft Bing'"]
+    decide(SimpleNamespace(system_one=system_one), "make Bing the default", screen, items, [], "Google Chrome", None, tried)
+
+    (questions,) = asked
+    for key in ("kind", "item"):
+        assert "already tried on this screen" in questions[key].instructions
+        assert "led straight back here" in questions[key].instructions

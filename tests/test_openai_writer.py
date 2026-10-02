@@ -87,6 +87,38 @@ def test_a_model_that_wants_max_completion_tokens_gets_them(openai_env, endpoint
     assert endpoint.seen[-1]["body"]["max_completion_tokens"] == 200
 
 
+def test_no_reasoning_effort_is_sent_unless_one_is_set(openai_env, endpoint):
+    compose_url(writer(), "open example", [])
+    assert "reasoning_effort" not in endpoint.seen[-1]["body"]
+
+
+def test_the_writer_and_the_answer_model_each_get_their_own_reasoning_effort(openai_env, endpoint, screen, make_item):
+    """Both may be the same model: which effort a call gets follows what the call is for."""
+    openai_env.setenv("CLICKER_WRITER_MODEL", "gpt-6-luna")
+    openai_env.setenv("CLICKER_ANSWER_MODEL", "gpt-6-luna")
+    openai_env.setenv("CLICKER_WRITER_REASONING", "none")
+    openai_env.setenv("CLICKER_ANSWER_REASONING", "low")
+    w = writer()
+    compose_url(w, "open example", [])
+    endpoint.state["reply"] = ANSWER
+    compose_answer(w, "find the concert", screen, [make_item(0, "SEP 19")], [], "the goal is achieved")
+    assert [(r["body"]["model"], r["body"]["reasoning_effort"]) for r in endpoint.seen] == [
+        ("gpt-6-luna", "none"),
+        ("gpt-6-luna", "low"),
+    ]
+
+
+def test_an_endpoint_that_refuses_reasoning_effort_is_asked_without_it_from_then_on(openai_env, endpoint):
+    openai_env.setenv("CLICKER_WRITER_REASONING", "none")
+    endpoint.state["reject"] = lambda body: (
+        "Unrecognized request argument: reasoning_effort" if "reasoning_effort" in body else None
+    )
+    w = writer()
+    assert compose_url(w, "open example", []) == "https://example.com"
+    assert compose_url(w, "open example again", []) == "https://example.com"
+    assert ["reasoning_effort" in r["body"] for r in endpoint.seen] == [True, False, False]
+
+
 def test_any_other_refusal_is_a_writer_error_and_not_a_retry_loop(openai_env, endpoint):
     endpoint.state["reject"] = lambda body: "model 'nope' not found"
     with pytest.raises(WriterError, match="not found"):

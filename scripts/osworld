@@ -5,7 +5,8 @@
 #   scripts/osworld setup --v2-tasks             the same, plus OSWorld 2.0's gated task files (needs HF_TOKEN)
 #   scripts/osworld run-jev TASK... --ocr OCR    run tasks with jev, reading the screen with the OCR backend named
 #   scripts/osworld run-luna TASK...             run the same tasks with OSWorld's GPT agent and gpt-6-luna
-#   scripts/osworld results [FOLDER]             each task's score, steps, and time, and jev's tokens (FOLDER: results/)
+#                                                either run takes --envs N: N task VMs side by side
+#   scripts/osworld results [FOLDER]             each task's score, steps, time, and tokens, then each agent's means (FOLDER: results/)
 #
 # A task is DOMAIN/ID: chrome/<id> names OSWorld 1.0's evaluation_examples/examples/chrome/<id>.json,
 # and tasks/<id> a 2.0 task that `setup --v2-tasks` downloaded. Several tasks run one after another,
@@ -41,6 +42,23 @@ LUNA_MODEL=gpt-6-luna
 LUNA_EFFORT=${OSWORLD_LUNA_EFFORT:-xhigh}
 
 usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# jev's writer and answer model here are Luna, the model it is measured against, so a run compares
+# jev with Luna inside it to Luna alone. The writer's short calls skip reasoning; the answer model,
+# which judges the screen, reasons a little. .env overrides any of these, so every CLICKER_WRITER_*
+# setting must then agree with the model named.
+luna_writer() {
+  [[ -n "${OPENAI_API_KEY:-}" || -n "${CLICKER_WRITER_API_KEY:-}" ]] ||
+    die "jev's writer here is $LUNA_MODEL: set OPENAI_API_KEY (or the CLICKER_WRITER_* settings) in .env"
+  export CLICKER_WRITER_API="${CLICKER_WRITER_API:-openai}"
+  export CLICKER_WRITER_BASE_URL="${CLICKER_WRITER_BASE_URL:-https://api.openai.com/v1}"
+  export CLICKER_WRITER_API_KEY="${CLICKER_WRITER_API_KEY:-${OPENAI_API_KEY:-}}"
+  export CLICKER_WRITER_MODEL="${CLICKER_WRITER_MODEL:-$LUNA_MODEL}"
+  export CLICKER_ANSWER_MODEL="${CLICKER_ANSWER_MODEL:-$LUNA_MODEL}"
+  export CLICKER_WRITER_REASONING="${CLICKER_WRITER_REASONING:-none}"
+  export CLICKER_ANSWER_REASONING="${CLICKER_ANSWER_REASONING:-low}"
+  echo "+ jev's writer: $CLICKER_WRITER_MODEL (reasoning $CLICKER_WRITER_REASONING), answers: $CLICKER_ANSWER_MODEL (reasoning $CLICKER_ANSWER_REASONING)"
+}
 
 die() {
   echo "scripts/osworld: $*" >&2
@@ -245,13 +263,23 @@ check_provider() {
   fi
 }
 
+# How many task VMs run side by side: --envs N, one by default. Each VM takes 4 GB and the agent's
+# CPU, so the machine's size bounds it.
+ENVS=1
+set_envs() {
+  [[ "$1" =~ ^[1-8]$ ]] || die "--envs takes a number of VMs from 1 to 8, not '$1'"
+  ENVS=$1
+}
+
 run_jev() {
   local tasks=() ocr="" task
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --ocr) [[ $# -gt 1 ]] || die "--ocr needs a backend"; ocr=$2; shift ;;
       --ocr=*) ocr=${1#--ocr=} ;;
-      -*) die "run-jev takes TASK... --ocr OCR, not $1" ;;
+      --envs) [[ $# -gt 1 ]] || die "--envs needs a number"; set_envs "$2"; shift ;;
+      --envs=*) set_envs "${1#--envs=}" ;;
+      -*) die "run-jev takes TASK... --ocr OCR [--envs N], not $1" ;;
       *) tasks+=("$1") ;;
     esac
     shift
@@ -270,6 +298,7 @@ run_jev() {
   require_setup
   check_provider
   [[ -n "${TYPESAFE_API_KEY:-}" ]] || die "TYPESAFE_API_KEY is not set (export it or put it in .env)"
+  luna_writer
   # Build the agent once here, as the runner will: a bad OCR backend or writer setting fails now,
   # not after the VM has started.
   echo "+ checking that JevAgent(ocr=$ocr, provider=$PROVIDER) builds"
@@ -292,7 +321,7 @@ except (ValueError, RuntimeError) as error:
     --observation_type "$JEV_OBSERVATION" \
     --max_steps "$MAX_STEPS" \
     --sleep_after_execution "$SLEEP_AFTER_EXECUTION" \
-    --num_envs 1 \
+    --num_envs "$ENVS" \
     --test_all_meta_path "$meta" \
     --eval_version "$version" \
     --result_dir "$RESULTS" \
@@ -302,8 +331,18 @@ except (ValueError, RuntimeError) as error:
 }
 
 run_luna() {
-  [[ $# -gt 0 ]] || die "run-luna needs a task: scripts/osworld run-luna DOMAIN/ID..."
-  local task
+  local tasks=() task
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --envs) [[ $# -gt 1 ]] || die "--envs needs a number"; set_envs "$2"; shift ;;
+      --envs=*) set_envs "${1#--envs=}" ;;
+      -*) die "run-luna takes TASK... [--envs N], not $1" ;;
+      *) tasks+=("$1") ;;
+    esac
+    shift
+  done
+  [[ ${#tasks[@]} -gt 0 ]] || die "run-luna needs a task: scripts/osworld run-luna DOMAIN/ID..."
+  set -- "${tasks[@]}"
   for task in "$@"; do check_task "$task"; done
   require_setup
   check_provider
@@ -321,7 +360,7 @@ run_luna() {
     --provider_name "$PROVIDER" \
     --max_steps "$MAX_STEPS" \
     --sleep_after_execution "$SLEEP_AFTER_EXECUTION" \
-    --num_envs 1 \
+    --num_envs "$ENVS" \
     --test_all_meta_path "$meta" \
     --eval_version "$version" \
     --result_dir "$RESULTS" \

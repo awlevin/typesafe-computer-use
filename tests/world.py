@@ -24,7 +24,7 @@ from typesafe_sdk import Noul
 
 from typesafe_computer_use import actions, runner
 from typesafe_computer_use.actions import Context
-from typesafe_computer_use.models import AxNode, Field, Item, Screen
+from typesafe_computer_use.models import AxNode, Field, Item, Popup, Screen
 from typesafe_computer_use.platform_adapter import desktop
 from typesafe_computer_use.runner import RunConfig, RunState, run
 
@@ -113,6 +113,8 @@ class Page:
     loads_in: int = 0  # steps of "wait" before the items appear
     no_ax_value: bool = False  # the field refuses to have its value set, so text has to be typed in
     covered_by: str | None = None  # an overlay eating every mouse click: the text of what is really hit
+    popup: str | None = None  # a window in front of the page, by name; the row reading "Close" is its close button
+    under_popup: tuple[str, ...] = ()  # the page's items under that window, which eats a mouse click on them
     on: dict[str, str | Callable[[World], str | None]] = dataclasses.field(default_factory=dict)
 
 
@@ -223,15 +225,35 @@ class World:
         return screen
 
     def perceive(self, screen: Screen) -> list[Item]:
-        """The rows as items, filling `screen.ax_refs` for the ones the app declared."""
+        """The rows as items, filling `screen.ax_refs` for the ones the app declared, and
+        `screen.covered` for the ones under the page's popup.
+
+        A control under a popup is found in the tree but not pressed through it, as in an OSWorld VM:
+        a press would reach it through the popup and leave nothing for the loop to get around.
+        """
         screen.ax_refs.clear()
+        screen.covered.clear()
         items = []
         cells = self.cells()
+        popup = self.popup(cells)
         for n, cell in enumerate(cells):
             items.append(Item(n, cell.text, 1.0, *cell.box, role=cell.role, source="ax" if cell.role else "ocr"))
-            if cell.role:
+            if popup is not None and cell.text in self.page.under_popup:
+                screen.covered[n] = popup
+            elif cell.role:
                 screen.ax_refs[n] = self._ref(self.click_action(cell, cells))
         return items
+
+    def popup(self, cells: list[Cell]) -> Popup | None:
+        """The page's popup, over the whole capture, with the row reading "Close" as its close button."""
+        if self.page.popup is None or self.loading_now:
+            return None
+        close = next((c for c in cells if c.text == "Close"), None)
+        button = None
+        if close is not None:
+            x1, y1, x2, y2 = (v / SCALE for v in close.box)
+            button = AxNode(role="AXButton", label="Close", x=x1, y=y1, w=x2 - x1, h=y2 - y1, pressable=False)
+        return Popup(self.page.popup, 0.0, 0.0, CAPTURE[0] / SCALE, CAPTURE[1] / SCALE, close=button)
 
     def focused_field(self) -> Field | None:
         """The page's text field, at the row that carries its label.
@@ -274,6 +296,9 @@ class World:
         px, py = point[0] * SCALE, point[1] * SCALE
         cells = self.cells()
         hit = next((c for c in cells if c.box[0] <= px <= c.box[2] and c.box[1] <= py <= c.box[3]), None)
+        if hit is not None and self.page.popup is not None and hit.text in self.page.under_popup:
+            self.apply(f"click:{self.page.popup}")  # the popup is in front of it and takes the click
+            return
         self.apply(self.click_action(hit, cells) if hit is not None else "click:nothing")
 
     def ax_press(self, ref: object) -> bool:
@@ -431,15 +456,18 @@ class FakeWriter:
     run stopped on, plus the text of any earlier screens the packet carries, so a scenario can
     assert through the answer both where the run ended and what it read on the way.
 
+    `submit` is whether the field fill asks for Return after the text.
+
     `reviews` scripts what the writer makes of each stop, one entry per answer asked for: a dict
     of the reply's fields, or a callable(packet) returning one. {"focus": ...} sends the classifier
     back, {"question": ...} asks the user, and either says the goal is not reached yet. Once the
     script is spent, every stop is the goal achieved, as it is with no script at all.
     """
 
-    def __init__(self, text: str = "", url: str = "", reviews: list | None = None):
+    def __init__(self, text: str = "", url: str = "", reviews: list | None = None, submit: bool = False):
         self.requests: list[dict] = []
         self.text = text
+        self.submit = submit
         self.url = url
         self.reviews = list(reviews or [])
         self.packets: list[dict] = []  # the packet of every answer asked for, in order
@@ -449,8 +477,8 @@ class FakeWriter:
         self.requests.append(request)
         asked = set(request["output_config"]["format"]["schema"]["properties"])
         packet = json.loads(request["messages"][0]["content"][-1]["text"])
-        if asked == {"fill", "text", "reason"}:
-            reply = {"fill": bool(self.text), "text": self.text, "reason": "the goal names what to type"}
+        if asked == {"fill", "text", "submit", "reason"}:
+            reply = {"fill": bool(self.text), "text": self.text, "submit": self.submit, "reason": "the goal names what to type"}
         elif asked == {"ok", "url", "reason"}:
             reply = {"ok": bool(self.url), "url": self.url, "reason": "the goal names the site"}
         elif asked == {"achieved", "answer", "focus", "question"}:

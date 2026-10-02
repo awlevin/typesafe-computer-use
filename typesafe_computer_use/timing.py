@@ -7,10 +7,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 PHASE_ORDER = ("capture", "screenshot", "app", "window", "field", "url", "ocr", "ax", "decide", "act", "total")
-# Neither of these is seconds: both print on the ocr phase rather than as phases of their own.
+# None of these is a phase: each prints on the ocr phase rather than as a phase of its own.
 OCR_REGION_PCT = "ocr_region_pct"  # share of the capture handed to Vision
 OCR_RECTS = "ocr_rects"  # how many rectangles it took, 0 for a full read or for nothing to read
-EXTRAS = (OCR_REGION_PCT, OCR_RECTS)
+OCR_AHEAD = "ocr_ahead"  # seconds the read took on a thread of its own, when it was read ahead of the step
+EXTRAS = (OCR_REGION_PCT, OCR_RECTS, OCR_AHEAD)
 
 
 @contextmanager
@@ -42,12 +43,19 @@ def format_timing(timing: dict[str, float]) -> str:
 
 
 def ocr_note(timing: dict[str, float]) -> str:
-    """What the ocr phase read, in parentheses, or nothing when the step did not record it."""
+    """What the ocr phase read, in parentheses, or nothing when the step did not record it. A read
+    made ahead of the step says how long it took on its own thread: the phase is only the wait."""
     pct = timing.get(OCR_REGION_PCT)
     if pct is None:
         return ""
     rects = int(timing.get(OCR_RECTS) or 0)
-    return f" ({pct:.0f}% of screen" + (f", {rects} rect{'' if rects == 1 else 's'})" if rects else ")")
+    ahead = timing.get(OCR_AHEAD)
+    notes = [f"{pct:.0f}% of screen"]
+    if rects:
+        notes.append(f"{rects} rect{'' if rects == 1 else 's'}")
+    if ahead is not None:
+        notes.append(f"read ahead in {ahead:.2f}s")
+    return f" ({', '.join(notes)})"
 
 
 def summarize(timings: list[dict[str, float]]) -> dict:

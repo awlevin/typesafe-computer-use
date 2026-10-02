@@ -11,7 +11,7 @@
 #   scripts/osworld-gcp watch                        forward the task VM's screen; prints the URL
 #   scripts/osworld-gcp status                       running or stopped, and since when
 #   scripts/osworld-gcp stop                         stop the machine now; its disk stays
-#   scripts/osworld-gcp pull-results                 copy every result on the machine into results/
+#   scripts/osworld-gcp pull-results                 start it if stopped, copy every result on it into results/
 #   scripts/osworld-gcp ssh [-- COMMAND]             a shell on the machine, or one command, for debugging
 #   scripts/osworld-gcp down                         destroy the machine and all infra/gcp made
 #
@@ -33,11 +33,11 @@ WATCH_PORT=${OSWORLD_GCP_WATCH_PORT:-8006}       # local port for `watch`
 VNC_PORT=8006 # the web VNC viewer's port inside OSWorld's Docker provider container
 
 # Never synced, and so never deleted on the machine either: git and tool state (.git has no
-# trailing slash because it is a file in a git worktree), local runs and results, secrets (.env
-# goes separately, mode 600), and personal Terraform files.
+# trailing slash because it is a file in a git worktree), local runs and results, the rows runs
+# recorded, secrets (.env goes separately, mode 600), and personal Terraform files.
 SYNC_EXCLUDES=(
-  /.git /.venv/ /.osworld/ /.private/ /.claude/ /.agents/ /runs/ /results/ /inspections/ /dist/
-  /.env /infra/gcp/.terraform/ /infra/gcp/terraform.tfvars '/infra/gcp/*.tfstate*'
+  /.git /.venv/ /.osworld/ /.private/ /.claude/ /.agents/ /runs/ /results/ /benchmarks/osworld/
+  /inspections/ /dist/ /.env /infra/gcp/.terraform/ /infra/gcp/terraform.tfvars '/infra/gcp/*.tfstate*'
   __pycache__/ .pytest_cache/ .ruff_cache/ .DS_Store
 )
 # rsync reaches the machine through `gcloud compute ssh`, which already knows the way (IAP or the
@@ -239,9 +239,18 @@ sync_repo() {
   $DRY_RUN || "${SSH[@]}" --command "$remote" <.env
 }
 
+# The pull goes through the same tunnel as the rest, and IAP drops a connection now and then, so it
+# tries again a few times, each wait longer, before a run's results count as not come back.
+PULL_TRIES=${OSWORLD_GCP_PULL_TRIES:-4}
 pull_results() {
+  local try
   run mkdir -p results
-  run "${RSYNC[@]}" "$INSTANCE:$REMOTE_DIR/results/" results/
+  for ((try = 1; ; try++)); do
+    run "${RSYNC[@]}" "$INSTANCE:$REMOTE_DIR/results/" results/ && return 0
+    ((try < PULL_TRIES)) || return 1
+    say "the pull failed; trying again ($try of $PULL_TRIES)"
+    sleep $((try * 10))
+  done
 }
 
 # The machine moves a task's earlier result into its results/archive/ before a new run, and a pull
@@ -293,18 +302,28 @@ run_task() {
   pid=$(start_detached "$name" "scripts/osworld $command$args")
   say "the run is $name on the machine; Ctrl-C here stops only the following: scripts/osworld-gcp attach follows it again, cancel stops it"
   follow "$name" "$pid" || status=$?
+  restart_if_stopped_under "$status"
   $DRY_RUN || [[ $status -ne 0 ]] || status=$(run_status "$name")
 
-  pull_results || say "no results came back"
+  local pulled=true
+  pull_results || pulled=false
   run "${SSH[@]}" --command "$REMOTE_EXEC scripts/osworld results" </dev/null || true
-  record "$name" "$command" "$settings" "${tasks[@]}"
+  if $pulled; then
+    record "$name" "$command" "$settings" "${tasks[@]}"
+  else
+    # Rows written now would say that no task came back, while the tasks are scored on the machine.
+    say "no results came back, so the run's rows were not recorded. Once scripts/osworld-gcp pull-results brings them, record them with:"
+    say "  $(cmdline "${RECORD[@]}" "benchmarks/osworld/$name.jsonl" results "$(agent_model "$command")" "$settings" "${tasks[@]}")"
+    [[ $status -ne 0 ]] || status=1
+  fi
   return "$status"
 }
 
 # The git state a run's rows carry, as JSON: the commit, whether the synced copy differed from it,
 # and a hash of that difference, plus OSWorld's pinned commit, the command, and the machine. The
-# folders a sync never carries are left out of both.
-UNSYNCED=(':!.agents' ':!.claude' ':!.private')
+# folders a sync never carries, and git does not ignore, are left out of both, so an earlier run's
+# rows, not yet committed, do not make the next run's code read as changed.
+UNSYNCED=(':!.agents' ':!.claude' ':!.private' ':!benchmarks/osworld')
 provenance() {
   local name=$1 command=$2 commit dirty=false diff_hash=null osworld
   commit=$(git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -326,16 +345,18 @@ diff_digest() {
 }
 
 # Append the run's rows to benchmarks/osworld/NAME.jsonl (see typesafe_computer_use/osworld/record.py).
+RECORD=(uv run --frozen --quiet python -m typesafe_computer_use.osworld.record)
+# The model a command's results are filed under; scripts/osworld: JEV_MODEL, LUNA_MODEL.
+agent_model() { if [[ $1 == run-jev ]]; then echo jev; else echo gpt-6-luna; fi; }
 record() {
-  local name=$1 command=$2 settings=$3 model
+  local name=$1 command=$2 settings=$3
   shift 3
-  if [[ $command == run-jev ]]; then model=jev; else model=gpt-6-luna; fi # scripts/osworld: JEV_MODEL, LUNA_MODEL
   if ! $DRY_RUN && ! command -v uv >/dev/null; then
     say "uv is not on PATH, so the run's rows were not recorded; the results are in results/"
     return 0
   fi
-  run uv run --frozen --quiet python -m typesafe_computer_use.osworld.record \
-    "benchmarks/osworld/$name.jsonl" results "$model" "$settings" "$@" || say "the run's rows were not recorded"
+  run "${RECORD[@]}" "benchmarks/osworld/$name.jsonl" results "$(agent_model "$command")" "$settings" "$@" ||
+    say "the run's rows were not recorded"
 }
 
 # Where a detached run keeps its log, its process id, and its exit status, on the machine. .osworld/
@@ -343,6 +364,7 @@ record() {
 RUNS_DIR=.osworld/runs
 KEEPALIVE=(--ssh-flag=-oServerAliveInterval=15 --ssh-flag=-oServerAliveCountMax=4) # a stalled stream ends in a minute
 RECONNECTS=${OSWORLD_GCP_RECONNECTS:-20}
+STOPPED_UNDER_RUN=3 # follow's status when the machine stopped during the run, and the run with it
 
 # The shell command that starts COMMAND in DIR as its own session, immune to the connection that
 # ran it, and prints its process id. Its output goes to RUNS_DIR/NAME.log, its process id to
@@ -361,7 +383,9 @@ start_detached() {
 }
 
 # Print a detached run's log here until the run ends, reconnecting when the stream drops. Each
-# reconnect starts after the last line already shown.
+# reconnect starts after the last line already shown. A machine that stopped under the run, as
+# Google may stop a Spot machine at any time, took the run with it: there is nothing to reconnect
+# to, so that returns STOPPED_UNDER_RUN at once.
 follow() {
   local name=$1 pid=$2 shown=0 tries=0 line log
   log="$REMOTE_DIR/$RUNS_DIR/$name.log"
@@ -377,9 +401,16 @@ follow() {
       shown=$((shown + 1))
     done < <("${SSH[@]}" "${KEEPALIVE[@]}" --command "$tail_cmd" </dev/null 2>/dev/null || true)
     if ! alive "$pid"; then return 0; fi
+    case $(machine_status RUNNING || true) in
+      TERMINATED | STOPPED | STOPPING | SUSPENDED | SUSPENDING)
+        say "the machine stopped during the run, and the run ended with it (Google may stop a Spot machine at any time)"
+        return "$STOPPED_UNDER_RUN"
+        ;;
+    esac
     ((tries++ < RECONNECTS)) || die "lost the run's output $RECONNECTS times; it goes on on the machine: scripts/osworld-gcp attach"
+    # Waits grow to a minute, so the retries outlast a change of IAP grant, which takes minutes.
     say "the connection dropped; the run goes on on the machine, reconnecting"
-    sleep 5
+    sleep $((tries * 5 < 60 ? tries * 5 : 60))
   done
 }
 
@@ -389,6 +420,16 @@ alive() {
   local answer
   answer=$("${SSH[@]}" "${KEEPALIVE[@]}" --command "kill -0 $1 2>/dev/null && echo alive || echo ended" </dev/null 2>/dev/null | tr -d '\r' | tail -n 1) || true
   [[ $answer != ended ]]
+}
+
+# After a run the machine stopped under (follow's status $1 is STOPPED_UNDER_RUN), start it again:
+# the tasks that finished before it stopped are on its disk, and the pull brings them back. The rest
+# need a run of their own.
+restart_if_stopped_under() {
+  [[ $1 -eq $STOPPED_UNDER_RUN ]] || return 0
+  say "starting the machine again to bring back the tasks that finished before it stopped; the rest need another run"
+  start_if_stopped
+  wait_for_machine ready
 }
 
 # A finished run's exit status, from its NAME.status; 1 when it left none.
@@ -475,6 +516,8 @@ case "${1:-}" in
     ;;
   pull-results)
     load
+    start_if_stopped # the results are on its disk, which a stop keeps
+    wait_for_machine
     pull_results
     ;;
   attach)
@@ -482,15 +525,20 @@ case "${1:-}" in
     read -r name pid <<<"$(latest_run)"
     [[ -n ${pid:-} ]] || die "no run has started on the machine"
     say "following $name"
-    follow "$name" "$pid"
+    status=0
+    follow "$name" "$pid" || status=$?
+    restart_if_stopped_under "$status"
     pull_results || say "no results came back"
+    exit "$status"
     ;;
   cancel)
     load
     read -r name pid <<<"$(latest_run)"
     [[ -n ${pid:-} ]] || die "no run has started on the machine"
     # The run is its own session, so its process group holds the runner and everything it started.
-    run "${SSH[@]}" --command "sudo -u $REMOTE_USER kill -TERM -- -$pid 2>/dev/null && echo stopped $name || echo $name had already ended" </dev/null
+    # A task VM the runner was starting when it stopped outlives it, so the task VMs go too: the
+    # machine runs nothing else in Docker.
+    run "${SSH[@]}" --command "sudo -u $REMOTE_USER kill -TERM -- -$pid 2>/dev/null && echo stopped $name || echo $name had already ended; sleep 5; ids=\$(sudo docker ps -q); [ -z \"\$ids\" ] || sudo docker rm -f \$ids >/dev/null && echo removed the task VMs" </dev/null
     ;;
   _rsh)
     # rsync's remote shell: `HOST COMMAND...` (and -l USER, which is unused) to gcloud compute ssh.
@@ -499,7 +547,7 @@ case "${1:-}" in
     shift # the host, which is always the cached instance
     unset OSWORLD_GCP_RSH
     load
-    exec "${SSH[@]}" --quiet --command "$*"
+    exec "${SSH[@]}" "${KEEPALIVE[@]}" --quiet --command "$*" # a dropped tunnel ends the pull, so its retry runs
     ;;
   *)
     usage

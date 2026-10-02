@@ -10,12 +10,13 @@ from typesafe_sdk import TypeSafeClient
 
 from .config import SITES
 from .decide import OFFSCREEN_PREFIX, Decision, row_mates, verify_typed
-from .models import Field, Guidance, Item, Missed, Screen
+from .models import Field, Guidance, Item, Missed, Popup, Screen
 from .platform_adapter import desktop
 from .writer import Writer, WriterError, compose_text, compose_url
 
 VERIFY_THRESHOLD = 0.5
 WAIT_SECONDS = 3.0  # what a wait adds to the settle delay every step already gets; three of them cover a slow page
+CLOSE_SECONDS = 0.5  # for a closed popup to leave the screen before the click under it
 
 
 @dataclass(frozen=True)
@@ -53,17 +54,36 @@ def click_item(item: Item, screen: Screen) -> str:
 
     A press goes to the control itself, so it lands even when the center of the box is covered by
     a sticky header, a cookie banner, or a tooltip. An element that refuses still has a location.
+    A click there would land on a popup in front of the item, so that popup is closed first.
     """
     ref = screen.ax_refs.get(item.index)
     if ref is not None and desktop.ax_press(ref):
         return f"pressed {item.text!r} via accessibility"
+    popup = screen.covered.get(item.index)
+    closed = f"{close_popup(popup)} then " if popup is not None else ""
     try:
         desktop.click_at(screen.to_points(item))
     except Missed as e:
-        return f"click refused: {item.text!r} was not clicked, {e}"
+        return f"{closed}click refused: {item.text!r} was not clicked, {e}"
     if ref is None:
-        return f"clicked {item.text!r}"
-    return f"clicked {item.text!r} (accessibility press did not take)"
+        return f"{closed}clicked {item.text!r}"
+    return f"{closed}clicked {item.text!r} (accessibility press did not take)"
+
+
+def close_popup(popup: Popup) -> str:
+    """Close a popup with its own close button, or with Escape when it has none, and give it a moment
+    to go. Never with any of its other buttons: those answer it, as 'Restore' restores the last
+    session's tabs."""
+    button = popup.close
+    if button is not None:
+        try:
+            desktop.click_at((button.x + button.w / 2, button.y + button.h / 2))
+        except Missed:
+            button = None  # the pointer never got there
+    if button is None:
+        desktop.press("escape")
+    desktop.sleep_watching(CLOSE_SECONDS)
+    return f"closed {popup.title}" if button is not None else f"closed {popup.title} with Escape"
 
 
 def press_offscreen(key: str, screen: Screen) -> str:
@@ -150,17 +170,27 @@ def _type_email(decision, screen: Screen, items, ctx: Context) -> str:
 
 
 def _type_text(decision, screen: Screen, items, ctx: Context) -> str:
+    """Fill the focused field with the writer's text, and check it, or submit it with Return.
+
+    Text the writer submits is not checked: Return usually takes the field away (a dialog closes, a
+    search runs), so a read after it no longer shows the field, and a read before it would split
+    the keystrokes and the Return into two OSWorld steps. The next screen says whether it took.
+    """
     if not (screen.field and screen.field.is_text):
         return "type_text refused: no text field is focused"
     if ctx.writer is None:
         return "type_text refused: no writer available"
     try:
-        text = compose_text(ctx.writer, ctx.goal, screen, items, ctx.history, ctx.guidance)
+        fill = compose_text(ctx.writer, ctx.goal, screen, items, ctx.history, ctx.guidance)
     except WriterError as e:
         return f"type_text refused: the writer failed ({e})"
+    text = fill.text
     if not text:
         return "type_text refused: writer declined to fill this field"
     how = fill_field(screen.field, text)
+    if fill.submit:
+        desktop.press("return")
+        return f"typed {text!r} into {screen.field.label!r} {how} and pressed Return"
     time.sleep(0.3)
     p = verify_typed(ctx.typesafe, ctx.goal, screen.field, text, desktop.focused_field())
     if p < VERIFY_THRESHOLD:

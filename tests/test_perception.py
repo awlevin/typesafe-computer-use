@@ -1,9 +1,12 @@
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
+from conftest import busy_page
 from PIL import Image, ImageDraw
 
 from typesafe_computer_use import perception
-from typesafe_computer_use.models import AxNode, Item, Screen
+from typesafe_computer_use.models import AxNode, Field, Item, Popup, Screen
 from typesafe_computer_use.perception import (
     drawn,
     goal_echoes,
@@ -103,6 +106,29 @@ def test_merge_consumes_each_ocr_block_at_most_once():
     assert sorted(it.source for it in merged) == ["ax", "ax+ocr"]
 
 
+def test_merge_lets_a_button_or_link_stand_for_the_symbol_read_off_its_icon():
+    blocks = [ocr_item(0, "\u00d7", 1893, 43, 1901, 51), ocr_item(1, "▶", 1305, 458, 1309, 466)]
+    controls = [ax_item(0, "Close", 1882, 27, 1920, 62), ax_item(1, "Security", 1291, 446, 1323, 479, role="link")]
+    assert [(it.text, it.source) for it in merge_sources(blocks, controls)] == [("Close", "ax"), ("Security", "ax")]
+
+
+def test_merge_keeps_a_symbol_on_a_tab_or_a_row_and_any_read_with_a_letter_or_digit():
+    blocks = [
+        ocr_item(0, "\u00d7", 300, 40, 310, 50),  # a tab's close box: a target of its own
+        ocr_item(1, "+", 100, 240, 110, 250),  # on a row, which holds more than one target
+        ocr_item(2, "C", 164, 84, 170, 96),  # a letter is text, even when it is an icon misread
+        ocr_item(3, "25", 1300, 500, 1320, 520),  # the value a field shows
+        ocr_item(4, "☆", 900, 900, 910, 910),  # on no control at all
+    ]
+    controls = [
+        ax_item(0, "Settings", 130, 30, 320, 60, role="tab"),
+        ax_item(1, "Downloads", 90, 230, 1000, 260, role="cell"),
+        ax_item(2, "Reload", 147, 73, 181, 107),
+        ax_item(3, "Show per page", 1290, 490, 1400, 530, role="field"),
+    ]
+    assert len(merge_sources(blocks, controls)) == len(blocks) + len(controls)
+
+
 def test_merge_numbers_everything_in_reading_order():
     blocks = [ocr_item(0, "below", 100, 300, 200, 330), ocr_item(1, "right", 800, 100, 900, 130)]
     controls = [ax_item(0, "left", 100, 105, 200, 135)]
@@ -187,3 +213,54 @@ def test_perceive_offers_a_hidden_control_off_the_list(monkeypatch):
     items = perception.perceive(screen, 255, "goal")
     assert [it.text for it in items] == ["Title"]
     assert screen.offscreen == [hidden]
+
+
+def test_perceive_says_which_items_are_under_a_popup_by_their_final_index(monkeypatch):
+    bubble = Popup("Restore pages?", 200.0, 0.0, 200.0, 100.0)
+    shown = control(20, 20, 101, 31, "Title")
+    under = replace(control(250, 20, 101, 31, "Organise"), covered_by=bubble)
+    monkeypatch.setattr(desktop, "actionable_elements", lambda pid, w, h: ([under, shown], [], False))
+    monkeypatch.setattr(perception, "ocr", lambda *args: [])
+    screen = Screen(image=busy_page((400, 200)), scale=1.0, app="Google Chrome", field=None, url=None, pid=7)
+    items = perception.perceive(screen, 255, "goal")
+    assert [it.text for it in items] == ["Title", "Organise"]  # renumbered in reading order
+    assert screen.covered == {1: bubble}
+
+
+# ----- the focused field's own text ----------------------------------------------------------
+
+# chrome/030eeff7 step 4, just after typing 'Do Not Track' into Chrome's settings search, with the
+# boxes and frames that step recorded. OCR read the box's text, and the magnifier beside it, as one
+# block, and the item question put 0.66 on it.
+SEARCH = Field(role="AXTextField", label="Search settings", placeholder="", value="Do Not Track", x=683, y=167, w=624, h=24)
+
+
+def settings_search(monkeypatch, field: Field | None) -> list[str]:
+    blocks = [
+        ocr_item(0, "Settings", 138, 170, 221, 192, conf=1.0),
+        ocr_item(1, "O、 Do Not Track", 654, 163, 753, 186, conf=0.91),
+        ocr_item(2, "+", 1312, 161, 1338, 196, conf=0.85),
+        ocr_item(3, "Restore pages?", 1620, 170, 1747, 187, conf=1.0),
+    ]
+    nodes = [
+        AxNode(role="AXTextField", label="Search settings", x=683, y=167, w=624, h=24, pressable=False),
+        AxNode(role="AXButton", label="Clear search", x=1307, y=165, w=28, h=28, pressable=False),
+    ]
+    monkeypatch.setattr(desktop, "actionable_elements", lambda pid, w, h: (nodes, [], False))
+    monkeypatch.setattr(perception, "ocr", lambda *args: blocks)
+    screen = Screen(image=busy_page((1920, 1080)), scale=1.0, app="Google Chrome", field=field, url=None, pid=7)
+    return [it.text for it in perception.perceive(screen, 255, "turn on Do Not Track")]
+
+
+def test_the_text_in_the_focused_field_is_the_field_and_not_an_item_of_its_own(monkeypatch):
+    # '+' goes too, as the icon OCR read off the 'Clear search' button, which stands for it.
+    assert sorted(settings_search(monkeypatch, SEARCH)) == ["Clear search", "Restore pages?", "Search settings", "Settings"]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [None, replace(SEARCH, role="AXTextArea"), replace(SEARCH, role="AXButton", label="Ads privacy sub-page back button")],
+    ids=["nothing focused", "a text area", "not a text field"],
+)
+def test_the_same_text_stays_when_that_field_is_not_a_focused_one_line_field(monkeypatch, field):
+    assert "O、 Do Not Track" in settings_search(monkeypatch, field)

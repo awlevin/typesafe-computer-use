@@ -100,5 +100,15 @@ def answer_model() -> str:
     return os.environ.get("CLICKER_ANSWER_MODEL", DEFAULT_ANSWER_MODEL)
 
 
+def writer_reasoning() -> str | None:
+    """The reasoning effort the writer's short calls ask an OpenAI-API model for; None leaves it to the model."""
+    return os.environ.get("CLICKER_WRITER_REASONING", "").strip() or None
+
+
+def answer_reasoning() -> str | None:
+    """The same for the answer model, which judges the screen and may be worth more thought."""
+    return os.environ.get("CLICKER_ANSWER_REASONING", "").strip() or None
+
+
 def email() -> str | None:
     return os.environ.get("CLICKER_EMAIL") or None

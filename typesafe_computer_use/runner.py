@@ -24,6 +24,7 @@ from .writer import Answer, WriterError, compose_answer
 # action's description says what was attempted and only the next capture says what came of it.
 MAX_IDLE = 3  # consecutive actions that left the screen as it was: refusals, waits on a spinner, scrolls at the bottom
 MAX_REPEATS = 2  # consecutive actions already taken on the same screen earlier in the run: a cycle, or a click that does nothing
+MAX_STALLS = 3  # stalls with no new page between them; the last is final, since two focuses from the writer did not free the run
 EARLIER_LINES = 600  # lines of text from the screens before the last one that the answer may also be read from
 MAX_QUESTIONS = 3  # questions the writer may put to the user in one run; an empty reply ends the asking sooner
 
@@ -34,6 +35,10 @@ STOPPED = {
     "nothing helps": "the classifier found nothing on this screen that helps with the goal",
     "low confidence": "the classifier was not confident enough in any next action",
     "stalled": "the last actions changed nothing",
+    "stuck": (
+        "the agent is stuck: its last actions changed nothing, as they did twice before on these same pages, "
+        "and the focus given each time did not help, so the run ends with this answer"
+    ),
     "step limit": "the run used every step it was allowed",
 }
 
@@ -50,6 +55,10 @@ class RunConfig:
     image: Path | None = None  # replay a saved capture (never acts)
     app: str | None = None  # frontmost app to report during replay
     url: str | None = None  # browser URL to report during replay
+    # Start each capture's OCR on a thread of its own while the capture asks for the app, window,
+    # field, and URL (see `OcrCache.read_ahead`). Worth it where those questions are slow, as over an
+    # OSWorld VM; off for this machine, whose own are quick.
+    read_ahead: bool = False
 
     @property
     def replay(self) -> bool:
@@ -72,6 +81,8 @@ class RunState:
     timings: list[dict[str, float]] = field(default_factory=list)
     idle: int = 0  # actions in a row that changed nothing on screen
     repeats: int = 0  # actions in a row already taken on the same screen
+    stalls: int = 0  # stalls since the run last reached a page it had not been on
+    pages: set[tuple[str, str | None]] = field(default_factory=set)  # every (app, URL) the run has shown
     last: Signature | None = None  # the screen the last action was taken on
     seen: list[tuple[Signature, str | None]] = field(
         default_factory=list
@@ -153,8 +164,9 @@ def hand_off(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     a question, which goes to the user first; the writer then reads the same screen again with the
     reply. Each reply is new information and each focus must lead to an action, so the exchange
     cannot go round on itself: a focus the classifier could not act on leaves the answer that came
-    with it standing.
+    with it standing, and a stall with no new page since the last two is final (see `stuck`).
     """
+    stuck(state, log)
     stopped = STOPPED.get(state.outcome)
     if stopped is None:
         return False
@@ -165,7 +177,7 @@ def hand_off(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
         log(f"\nanswer ({verdict(state.answer)}; the focus led to no action, so the last answer stands):\n  {state.answer.text}")
         return False
 
-    may_resume = step < cfg.steps and len(state.handoffs) < cfg.handoffs
+    may_resume = step < cfg.steps and len(state.handoffs) < cfg.handoffs and state.outcome != "stuck"
     reviews: list[dict] = []
     while True:
         can_ask = may_resume and ctx.ask is not None and len(state.guidance.exchanges) < MAX_QUESTIONS
@@ -206,6 +218,24 @@ def hand_off(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
             return False
         finally:
             (cfg.out / f"step-{step:03d}-review.json").write_text(json.dumps(reviews, indent=2), encoding="utf-8")
+
+
+def stuck(state: RunState, log: Log) -> None:
+    """Count a stall, and call the run stuck once it is the third with no new page between them.
+
+    A stall hands the run to the writer like any stop, and its focus usually frees the classifier.
+    When the classifier stalls again on the pages it was already on, the focus did not help, and
+    each further round costs a writer call and a few futile actions. On OSWorld's Chrome tasks every
+    run that stalled a third time on the same pages failed all the same, up to 210 s later, and no
+    solved run stalled more than twice. A new page is the progress that starts the count again, so
+    a long task that stalls now and then on its way is not cut short.
+    """
+    if state.outcome != "stalled":
+        return
+    state.stalls += 1
+    if state.stalls >= MAX_STALLS:
+        log(f"  stuck: {state.stalls} stalls without reaching a new page; the run ends here")
+        state.outcome = "stuck"
 
 
 def verdict(answer: Answer) -> str:
@@ -255,9 +285,10 @@ def run_step(cfg: RunConfig, ctx: Context, state: RunState, step: int, log: Log)
     desktop.check_abort()
     timing: dict[str, float] = {}
     started = time.perf_counter()
+    cache = None if cfg.replay else state.ocr_cache
     with phase(timing, "capture"):
-        screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser, timing)
-    items = perceive(screen, MAX_OPTIONS, cfg.goal, timing, None if cfg.replay else state.ocr_cache)
+        screen = capture(cfg.image, cfg.app, cfg.url, ctx.browser, timing, ahead=cache if cfg.read_ahead else None)
+    items = perceive(screen, MAX_OPTIONS, cfg.goal, timing, cache)
     state.view = (screen, items)
     if not screen_moved(state, screen, items, log):
         return False
@@ -343,9 +374,13 @@ def screen_moved(state: RunState, screen: Screen, items: list[Item], log: Log) -
 
     The capture is the only witness to what an action did. Compared with the one the action was
     taken on, an unchanged screen means a refused action, a wait on a page still loading, or a
-    scroll that has run out of page; any of them is fine a couple of times.
+    scroll that has run out of page; any of them is fine a couple of times. A page the run has not
+    been on before starts the count of stalls again (see `stuck`).
     """
     now = signature(screen, items)
+    if now[:2] not in state.pages:
+        state.pages.add(now[:2])
+        state.stalls = 0
     if state.last is not None:
         state.idle = state.idle + 1 if same_screen(now, state.last) else 0
     state.last = now

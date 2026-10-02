@@ -6,9 +6,9 @@ import pytest
 
 from typesafe_computer_use import actions
 from typesafe_computer_use.actions import click_item, fill_field, press_offscreen
-from typesafe_computer_use.models import AxNode, Field, Item, Missed
+from typesafe_computer_use.models import AxNode, Field, Item, Missed, Popup
 from typesafe_computer_use.platform_adapter import desktop
-from typesafe_computer_use.writer import make_writer
+from typesafe_computer_use.writer import Fill, make_writer
 
 
 @pytest.fixture
@@ -94,6 +94,59 @@ def test_perform_routes_an_offscreen_key_to_the_press(screen, calls, monkeypatch
     decision = SimpleNamespace(chosen="offscreen:0")
     assert actions.perform(decision, live, [], None) == "pressed 'Note 900' (off-screen control) via accessibility"
     assert pressed == [ref]
+
+
+# Chrome's "Restore pages?" bubble on OSWorld's chrome/2ad9387a, in screen points, over the bookmark
+# manager's Organise button, whose center is under the bubble's Close button.
+CLOSE = AxNode(role="AXButton", label="Close", x=1879.0, y=128.0, w=24.0, h=22.0, pressable=False)
+BUBBLE = Popup("Restore pages?", 1592.0, 103.0, 334.0, 260.0, close=CLOSE)
+ORGANISE = Item(3, "Organise", 1.0, 3744.0, 252.0, 3808.0, 316.0, role="button", source="ax")  # capture pixels, scale 2
+
+
+@pytest.fixture
+def keys_and_pauses(monkeypatch):
+    log: list[tuple] = []
+    monkeypatch.setattr(desktop, "press", lambda key, command=False: log.append(("press", key)))
+    monkeypatch.setattr(desktop, "sleep_watching", lambda seconds: log.append(("sleep", seconds)))
+    return log
+
+
+def test_an_item_under_a_popup_is_clicked_after_the_popups_close_button(screen, calls, keys_and_pauses):
+    live = replace(screen, covered={3: BUBBLE})
+    assert click_item(ORGANISE, live) == "closed 'Restore pages?' then clicked 'Organise'"
+    assert calls == [("click", (1891.0, 139.0)), ("click", (1888.0, 142.0))]
+    assert keys_and_pauses == [("sleep", actions.CLOSE_SECONDS)]
+
+
+def test_a_popup_with_no_close_button_is_closed_with_escape_and_never_with_its_other_buttons(screen, calls, keys_and_pauses):
+    live = replace(screen, covered={3: replace(BUBBLE, name="", close=None)})
+    assert click_item(ORGANISE, live) == "closed a popup with Escape then clicked 'Organise'"
+    assert calls == [("click", (1888.0, 142.0))]
+    assert keys_and_pauses == [("press", "escape"), ("sleep", actions.CLOSE_SECONDS)]
+
+
+def test_a_close_button_the_pointer_cannot_reach_leaves_escape(screen, keys_and_pauses, monkeypatch):
+    clicks = []
+
+    def click_at(point):
+        if point == (1891.0, 139.0):
+            raise Missed("the cursor went to (0, 0)")
+        clicks.append(point)
+
+    monkeypatch.setattr(desktop, "click_at", click_at)
+    assert (
+        click_item(ORGANISE, replace(screen, covered={3: BUBBLE}))
+        == "closed 'Restore pages?' with Escape then clicked 'Organise'"
+    )
+    assert clicks == [(1888.0, 142.0)]
+
+
+def test_an_item_pressed_through_accessibility_leaves_the_popup_alone(screen, calls, keys_and_pauses, monkeypatch):
+    """A press reaches the control under a popup, so there is nothing to close."""
+    monkeypatch.setattr(desktop, "ax_press", lambda ref: True)
+    live = replace(screen, ax_refs={3: object()}, covered={3: BUBBLE})
+    assert click_item(ORGANISE, live) == "pressed 'Organise' via accessibility"
+    assert calls == [] and keys_and_pauses == []
 
 
 def context(writer=None) -> actions.Context:
@@ -253,7 +306,7 @@ def test_failed_verification_restores_original_field_without_touching_new_focus(
     original = field(ref=object(), value="previous query")
     other = field(ref=object(), value="important draft")
     values = {original.ref: "new query", other.ref: other.value}
-    monkeypatch.setattr(actions, "compose_text", lambda *a: "new query")
+    monkeypatch.setattr(actions, "compose_text", lambda *a: Fill("new query"))
     monkeypatch.setattr(actions, "fill_field", lambda *a: "via accessibility")
     monkeypatch.setattr(actions.time, "sleep", lambda *a: None)
     monkeypatch.setattr(desktop, "focused_field", lambda: other)
@@ -266,6 +319,21 @@ def test_failed_verification_restores_original_field_without_touching_new_focus(
 
     assert "restored previous value" in result
     assert values == {original.ref: original.value, other.ref: other.value}
+
+
+def test_text_the_writer_submits_is_followed_by_return_and_left_to_the_next_screen(screen, calls, monkeypatch):
+    """Return usually takes the field away, so nothing reads it afterwards and nothing is restored."""
+    monkeypatch.setattr(desktop, "press", lambda key, command=False: calls.append(("press", key)))
+    monkeypatch.setattr(actions, "compose_text", lambda *a: Fill("Favorites", submit=True))
+    monkeypatch.setattr(actions.time, "sleep", lambda *a: pytest.fail("there is no read to wait for"))
+    monkeypatch.setattr(desktop, "focused_field", lambda: pytest.fail("the field is gone after Return"))
+    monkeypatch.setattr(actions, "verify_typed", lambda *a: pytest.fail("nothing to check the text against"))
+    monkeypatch.setattr(actions, "restore_field", lambda *a: pytest.fail("nothing to restore"))
+
+    result = actions._type_text(None, replace(screen, field=field()), [], context(object()))
+
+    assert result == "typed 'Favorites' into 'Email' via keystrokes and pressed Return"
+    assert calls == [("clear",), ("type", "Favorites"), ("press", "return")]
 
 
 @pytest.mark.parametrize("current", [None, "user edited the value", "prefix new query"])

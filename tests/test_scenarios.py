@@ -13,6 +13,8 @@ import json
 import pytest
 from world import FakeWriter, Page, World, drive, scripted
 
+from typesafe_computer_use.runner import MAX_REPEATS, MAX_STALLS, STOPPED
+
 GOAL = "buy a ticket to the next show"
 
 # The click point of row N, in screen points: the center of (100, 100+40N, 600, 130+40N) halved.
@@ -1716,3 +1718,132 @@ def test_l53_unverified_keystrokes_stay_when_the_field_will_not_take_a_value(mon
     assert "via keystrokes" in state.history[0] and "could not safely restore previous value" in state.history[0]
     assert world.typed["Search"] == "bruno mars tour"  # left for the next step to see, not erased blind
     assert world.log == ["clear_field", "type:bruno mars tour"]  # emptied before typing, never after
+
+
+def test_l54_a_run_stuck_three_times_on_the_same_page_ends_with_the_writers_answer(monkeypatch, tmp_path):
+    """OSWorld's chrome/9f935cce: the classifier clicked the label beside a dropdown, which does nothing,
+    under every focus the writer gave, for ten hand-offs and three minutes. The third stall ends it."""
+    forms = "https://example.com/forms"
+    world = World(
+        [
+            Page(name="forms", items=["Agency", "-Any-", "Apply Filters"], url=forms, on={"click:-Any-": "open"}),
+            Page(name="open", items=["Civil Division", "Tax Division"], url=forms),
+        ]
+    )
+    writer = FakeWriter(reviews=[{"focus": "Open the '-Any-' dropdown"}] * 9)
+    policy = scripted(*[("click_item", "Agency")] * 20)
+
+    state = drive(world, policy, goal=GOAL, monkeypatch=monkeypatch, tmp_path=tmp_path, writer=writer)
+
+    assert state.outcome == "stuck"
+    assert [h.outcome for h in state.handoffs] == ["stalled"] * (MAX_STALLS - 1)
+    assert world.log == ["click:Agency"] * 7  # three to the first stall and two to each after, where a run went on for ten
+    assert len(writer.packets) == MAX_STALLS  # the last reading is the answer, though it offered one more focus
+    assert writer.packets[-1]["why_the_run_stopped"] == STOPPED["stuck"]
+    assert not state.answer.achieved
+    assert json.loads((tmp_path / "run" / "run.json").read_text())["outcome"] == "stuck"
+    assert "stuck: 3 stalls without reaching a new page; the run ends here" in (tmp_path / "run" / "run.log").read_text()
+
+
+def test_l55_a_new_page_starts_the_count_of_stalls_again(monkeypatch, tmp_path):
+    """A long task that stalls once on each of its pages, and each time a focus frees it, is never stuck."""
+    wizard = "https://example.com/signup/"
+    world = World(
+        [
+            *[
+                Page(name=f"step {n}", items=[f"Step {n} of 3", "Help", "Next"], url=f"{wizard}{n}", on={"click:Next": nxt})
+                for n, nxt in ((1, "step 2"), (2, "step 3"), (3, "welcome"))
+            ],
+            Page(name="welcome", items=["Welcome aboard"], url=f"{wizard}done"),
+        ]
+    )
+    helped: dict[str, int] = {}
+
+    def policy(state: dict, questions: dict) -> tuple:
+        """Try Help until the run stalls on it, then take Next, as the writer's focus says."""
+        url = state["browser_active_tab_url"]
+        if url.endswith("done"):
+            return ("done", None)
+        helped[url] = helped.get(url, 0) + 1
+        return ("click_item", "Help" if helped[url] <= MAX_REPEATS + 1 else "Next")
+
+    writer = FakeWriter(reviews=[{"focus": "Click 'Next'"}] * MAX_STALLS)
+
+    state = drive(world, policy, goal=GOAL, steps=30, monkeypatch=monkeypatch, tmp_path=tmp_path, writer=writer)
+
+    assert state.outcome == "done" and state.answer.achieved
+    assert world.page.name == "welcome"
+    assert [h.outcome for h in state.handoffs] == ["stalled"] * MAX_STALLS  # enough to be stuck, were they on one page
+    assert world.log == (["click:Help"] * (MAX_REPEATS + 1) + ["click:Next"]) * 3
+
+
+def test_l56_a_name_the_writer_submits_is_typed_and_saved_in_one_step(monkeypatch, tmp_path):
+    """OSWorld's chrome/2ad9387a typed a new bookmark folder's name in one step and clicked Save in the
+    next, and chrome/2ae9ba84 typed a profile name and never saved it. Return right after the text does
+    both at once. Nothing checks the field after it: the dialog is gone, and the next screen says
+    whether the name took."""
+    manager = "chrome://bookmarks/"
+    world = World(
+        [
+            Page(
+                name="dialog",
+                items=["Add folder", "Name", "Cancel", "Save"],
+                url=manager,
+                field="Name",
+                on={"enter": lambda w: "saved" if w.typed.get("Name") == "Favorites" else None},
+            ),
+            Page(name="saved", items=["Bookmarks bar", "Favorites"], url=manager),
+        ]
+    )
+
+    state = drive(
+        world,
+        scripted(("type_text", None), ("done", None)),
+        goal="make a new folder on the bookmarks bar called Favorites",
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+        writer=FakeWriter(text="Favorites", submit=True),
+        noul=0.0,  # a check of the field would fail, and take the name back out
+    )
+
+    assert state.outcome == "done" and world.page.name == "saved"
+    assert state.history == ["typed 'Favorites' into 'Name' via accessibility and pressed Return"]
+    assert world.log == ["type:Favorites", "enter"]
+    assert state.calls.count == {"classifier": 2, "writer": 2}  # two decisions and no check; the name and the answer
+
+
+def test_l57_an_item_under_a_popup_is_reached_by_closing_the_popup_in_the_same_step(monkeypatch, tmp_path):
+    """OSWorld's chrome/2ad9387a: Chrome's "Restore pages?" bubble sat over the bookmark manager's
+    Organise button. The click meant for Organise closed the bubble, the loop saw no menu, and two
+    steps went to finding out. Now the bubble is closed first, by its Close button, and Organise is
+    clicked in the same step. Its Restore button, which reopens the last session, is never pressed."""
+    manager = "chrome://bookmarks/"
+    world = World(
+        [
+            Page(
+                name="bubble",
+                items=["Bookmarks", ("Organise", "button"), "Restore pages?", ("Close", "button"), ("Restore", "button")],
+                url=manager,
+                popup="Restore pages?",
+                under_popup=("Organise",),
+                on={"click:Close": "manager", "click:Restore": "restored"},
+            ),
+            Page(name="manager", items=["Bookmarks", ("Organise", "button")], url=manager, on={"click:Organise": "menu"}),
+            Page(name="menu", items=["Bookmarks", "Add new bookmark", "Add new folder"], url=manager),
+            Page(name="restored", items=["Yesterday's tabs"], url="https://example.com/"),
+        ]
+    )
+
+    def policy(state: dict, questions: dict) -> tuple:
+        texts = [it["text"] for it in state["screen_items_in_reading_order"]]
+        return ("done", None) if "Add new folder" in texts else ("click_item", "Organise")
+
+    state = drive(world, policy, goal="make a new folder on the bookmarks bar", monkeypatch=monkeypatch, tmp_path=tmp_path)
+
+    assert state.outcome == "done" and world.page.name == "menu"
+    assert state.history == ["closed 'Restore pages?' then clicked 'Organise'"]
+    assert world.log == ["click:Close", "click:Organise"]
+    (organise,) = [it for it in world.fake.states[0]["screen_items_in_reading_order"] if it["text"] == "Organise"]
+    assert organise["under"] == "'Restore pages?'"
+    assert "under 'Restore pages?'" in world.fake.asked[0]["item"].criteria[str(organise["i"])]
+    assert state.calls.count["classifier"] == 2  # one decision to open the menu, one to stop

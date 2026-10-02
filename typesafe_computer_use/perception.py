@@ -3,25 +3,27 @@
 from __future__ import annotations
 
 import math
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageStat
 
 from .config import MAX_OPTIONS, MIN_OCR_CONFIDENCE
-from .models import AxNode, Box, Item, Screen
+from .models import MENU_BAR_PT, AxNode, Box, Item, Screen
 from .platform_adapter import desktop
-from .timing import OCR_RECTS, OCR_REGION_PCT, phase
+from .timing import OCR_AHEAD, OCR_RECTS, OCR_REGION_PCT, phase
 
 Line = tuple[str, float, Box]
 ECHO_CHARS = 24
 MIN_BOX_OVERLAP = 0.5  # intersection over the smaller box
 MIN_TOKEN_OVERLAP = 0.5
+ICON_HOSTS = {"button", "link"}  # one target each; a tab or a row holds others, such as its close box
 
 # OCR costs about two thirds of a step, and it scales with the amount of text, so the way to make it
 # cheaper is to read less of the screen: the frontmost window's own columns instead of the display,
 # and within them only the blobs of tiles that changed since the previous capture, one crop each.
-MENU_BAR_PT = 40.0  # the strip above every window, which the app's own menus live in
 REGION_MARGIN_PT = 8.0  # slack around the window, for the shadow and a clipped glyph
 THUMB_DIVISOR = 8  # the change detector works on a 1/8 scale grayscale copy
 TILE_PX = 256.0  # tile side in capture pixels
@@ -38,15 +40,21 @@ def capture(
     url: str | None = None,
     browser: str = "",
     timing: dict[str, float] | None = None,
+    ahead: OcrCache | None = None,
 ) -> Screen:
     """Capture the main display, or load a saved capture for replay (then app/url are taken as given).
 
     Each query below is a round trip to the window server, AX, or AppleScript. Pass `timing` to
     record the seconds each one costs under "screenshot", "app", "window", "field", and "url".
+    Pass `ahead`, the run's OCR cache, to start reading the capture while those queries run (see
+    `OcrCache.read_ahead`).
     """
     replay = image_path is not None and app is not None
     with phase(timing, "screenshot"):
         image = Image.open(image_path).convert("RGB") if image_path else desktop.screenshot()
+    scale = desktop.display_scale(image)
+    if ahead is not None:
+        ahead.read_ahead(image, scale)
     with phase(timing, "app"):
         if replay:
             frontmost, pid = app, None
@@ -59,9 +67,7 @@ def capture(
         field = None if replay else desktop.focused_field()
     with phase(timing, "url"):
         page_url = url if url is not None else (None if replay else desktop.browser_url(browser))
-    return Screen(
-        image=image, scale=desktop.display_scale(image), app=frontmost, field=field, url=page_url, pid=pid, window=window
-    )
+    return Screen(image=image, scale=scale, app=frontmost, field=field, url=page_url, pid=pid, window=window)
 
 
 def goal_echoes(goal: str) -> set[str]:
@@ -87,6 +93,7 @@ def perceive(
     Fills `screen.ax_refs` on the way, so an item that came from the accessibility tree can be
     pressed through it later. The merge renumbers everything, hence the side table over the
     final indices rather than a handle on the item itself, which has to stay printable.
+    `screen.covered` is a side table the same way: the items under a popup, and which popup.
 
     Fills `screen.offscreen` too: labelled controls the app exposes but does not show. They are
     offered on their own, never as items, because nothing on the capture points at them.
@@ -103,9 +110,13 @@ def perceive(
         nodes = [node for node in nodes if node not in blank]
         hidden = hidden + blank
         controls = to_ax_items(nodes, screen.scale)
-    merged = merge_with_origins(blocks, controls, budget)
+    merged = merge_with_origins([block for block in blocks if not in_field(block, screen)], controls, budget)
     screen.ax_refs.clear()
     screen.ax_refs.update({it.index: nodes[origin].ref for it, origin in merged if origin is not None and nodes[origin].ref})
+    screen.covered.clear()
+    screen.covered.update(
+        {it.index: nodes[origin].covered_by for it, origin in merged if origin is not None and nodes[origin].covered_by}
+    )
     items = [it for it, _ in merged]
     screen.offscreen.clear()
     screen.offscreen.extend(offscreen_controls(hidden, items))
@@ -122,12 +133,17 @@ def ocr(
     """The screen's text as items, filtered and merged into blocks.
 
     The filter runs over the raw lines every step, including the reused ones, so a cached line is
-    treated exactly as a freshly read one.
+    treated exactly as a freshly read one. A read the cache made ahead of the step counts as its
+    own when it read this screen (see `OcrCache.read_ahead`), and the seconds it took go under
+    "ocr_ahead".
     """
-    lines, read_pct, rects = ocr_lines(screen, cache)
+    ahead = cache.take_ahead(screen) if cache is not None else None
+    lines, read_pct, rects = ahead.lines if ahead is not None else ocr_lines(screen, cache)
     if timing is not None:
         timing[OCR_REGION_PCT] = round(read_pct, 1)
         timing[OCR_RECTS] = rects
+        if ahead is not None:
+            timing[OCR_AHEAD] = round(ahead.seconds, 3)
     echoes = goal_echoes(goal)
     kept: list[Line] = [
         (t.strip(), c, b) for t, c, b in lines if t.strip() and c >= MIN_OCR_CONFIDENCE and not is_echo(t, echoes)
@@ -151,6 +167,7 @@ class OcrCache:
         self.region: Box | None = None
         self.thumb: Image.Image | None = None
         self.lines: list[Line] = []
+        self._ahead: ReadAhead | None = None
 
     def reusable(self, screen: Screen, region: Box, thumb: Image.Image) -> bool:
         """Never across a different app, a moved or resized window, or a different read region."""
@@ -164,6 +181,78 @@ class OcrCache:
 
     def store(self, screen: Screen, region: Box, thumb: Image.Image, lines: list[Line]) -> None:
         self.app, self.window, self.region, self.thumb, self.lines = screen.app, screen.window, region, thumb, list(lines)
+
+    def adopt(self, other: OcrCache) -> None:
+        """Take what `other` remembers of the previous capture as this cache's own."""
+        self.app, self.window, self.region, self.thumb = other.app, other.window, other.region, other.thumb
+        self.lines = list(other.lines)
+
+    def copy(self) -> OcrCache:
+        other = OcrCache()
+        other.adopt(self)
+        return other
+
+    def read_ahead(self, image: Image.Image, scale: float) -> None:
+        """Start reading `image` on a thread of its own, while the capture asks which app and window it
+        shows. Where those queries are slow, as an OSWorld VM's tree is, the read overlaps them.
+
+        The read is `ocr_lines` over the previous capture's app and window, into a copy of this cache,
+        so it is the very read `ocr_lines` makes once the capture finds them unchanged, as a page that
+        stays in one window does; `ocr` takes it then, and reads the screen itself otherwise. The
+        first capture has nothing to go on, so nothing is read ahead of it. A read still running
+        from an earlier capture is waited out first, so the OCR engine never reads two at once.
+        """
+        self.drop_ahead()
+        if self.thumb is None:
+            return
+        guess = Screen(image=image, scale=scale, app=self.app or "", field=None, url=None, window=self.window)
+        self._ahead = ReadAhead(guess, self.copy())
+
+    def take_ahead(self, screen: Screen) -> ReadAhead | None:
+        """The read made ahead of `screen`, once it is done, when it read this capture over this app
+        and window; its cache becomes this one. None when there is none, or it read another."""
+        ahead, self._ahead = self._ahead, None
+        if ahead is None:
+            return None
+        ahead.wait()
+        if ahead.lines is None or not ahead.fits(screen):
+            return None
+        self.adopt(ahead.cache)
+        return ahead
+
+    def drop_ahead(self) -> None:
+        """Wait out a read made ahead of a capture that never came to be read, and forget it."""
+        if self._ahead is not None:
+            self._ahead.wait()
+            self._ahead = None
+
+
+class ReadAhead:
+    """One capture's OCR, read on a thread of its own over the app and window it guessed."""
+
+    def __init__(self, screen: Screen, cache: OcrCache) -> None:
+        self.screen = screen  # the capture, and the app and window the read bet on
+        self.cache = cache  # a copy of the run's cache, which the read updates
+        self.lines: tuple[list[Line], float, int] | None = None  # what `ocr_lines` returned; None if it raised
+        self.seconds = 0.0
+        self._thread = threading.Thread(target=self._read, name="jev-ocr-ahead", daemon=True)
+        self._thread.start()
+
+    def _read(self) -> None:
+        started = time.perf_counter()
+        try:
+            self.lines = ocr_lines(self.screen, self.cache)
+        except Exception:  # the step reads the screen itself, and raises what this one swallowed
+            self.lines = None
+        self.seconds = time.perf_counter() - started
+
+    def wait(self) -> None:
+        self._thread.join()
+
+    def fits(self, screen: Screen) -> bool:
+        """Whether this read is the one `ocr_lines` would make of `screen`."""
+        guess = self.screen
+        return screen.image is guess.image and (screen.scale, screen.app, screen.window) == (guess.scale, guess.app, guess.window)
 
 
 def ocr_lines(screen: Screen, cache: OcrCache | None = None) -> tuple[list[Line], float, int]:
@@ -500,6 +589,21 @@ def offscreen_controls(nodes: list[AxNode], items: list[Item]) -> list[AxNode]:
     return out
 
 
+def in_field(block: Item, screen: Screen) -> bool:
+    """Whether an OCR block sits inside the focused one-line text field: its value, its placeholder,
+    or an icon drawn in it.
+
+    The field is an item already when the app declares it, and its value is in the state. Read again
+    as a block of its own, the text just typed becomes something to click. A text area is left
+    alone: its lines are content, not one value.
+    """
+    field = screen.field
+    if field is None or not field.is_text or field.role == "AXTextArea":
+        return False
+    x, y = screen.to_points(block)
+    return field.x < x < field.x + field.w and field.y < y < field.y + field.h
+
+
 def to_ax_items(nodes: list[AxNode], scale: float) -> list[Item]:
     """Controls as items, converted from screen points to capture pixels."""
     return [
@@ -524,7 +628,8 @@ def ax_items(screen: Screen, budget: int) -> list[Item]:
 
 
 def merge_sources(ocr_items: list[Item], ax_items: list[Item], budget: int = MAX_OPTIONS) -> list[Item]:
-    """One item per thing. An accessibility control that sits on the OCR block naming it replaces both."""
+    """One item per thing. An accessibility control that sits on the OCR block naming it replaces both,
+    and a button or link stands for the symbol OCR read off its icon."""
     return [it for it, _ in merge_with_origins(ocr_items, ax_items, budget)]
 
 
@@ -551,10 +656,20 @@ def merge_with_origins(ocr_items: list[Item], ax_items: list[Item], budget: int 
         taken.add(best)
         text = control.text if len(control.text) >= len(block.text) else block.text
         merged.append((replace(block, text=text, role=control.role, source="ax+ocr"), origin))
-    merged += [(block, None) for i, block in enumerate(ocr_items) if i not in taken]
+    merged += [(block, None) for i, block in enumerate(ocr_items) if i not in taken and not is_icon(block, ax_items)]
     kept = [merged[i] for i in kept_by_budget([it for it, _ in merged], budget)]
     order = reading_order([it for it, _ in kept])
     return [(replace(kept[j][0], index=i), kept[j][1]) for i, j in enumerate(order)]
+
+
+def is_icon(block: Item, controls: list[Item]) -> bool:
+    """An OCR block with no letter or digit, centered on a button or link: its icon, read as a stray
+    symbol ('←' on Back, '☆' on the bookmark star, '+' on New Tab). The control already offers that
+    target under its name, and a second option for the same click only splits the vote."""
+    if any(ch.isalnum() for ch in block.text):
+        return False
+    cx, cy = block.center
+    return any(c.role in ICON_HOSTS and c.x1 <= cx <= c.x2 and c.y1 <= cy <= c.y2 for c in controls)
 
 
 def box_overlap(a: Item, b: Item) -> float:

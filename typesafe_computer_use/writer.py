@@ -13,7 +13,16 @@ import anthropic
 import openai
 from PIL import Image
 
-from .config import answer_model, custom_writer_endpoint, writer_api, writer_base_url, writer_model, writer_vision
+from .config import (
+    answer_model,
+    answer_reasoning,
+    custom_writer_endpoint,
+    writer_api,
+    writer_base_url,
+    writer_model,
+    writer_reasoning,
+    writer_vision,
+)
 from .dates import now_context
 from .models import Guidance, Item, Screen
 from .openai_writer import OpenAIWriter
@@ -68,9 +77,10 @@ def _structured(
     packet: dict,
     properties: dict,
     max_tokens: int,
-    model: str | None = None,
+    answering: bool = False,
     image: Image.Image | None = None,
 ) -> dict:
+    """One JSON reply from the writer's model, or from the answer model when `answering`."""
     schema = {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}
     content: list[dict] = [{"type": "text", "text": json.dumps(packet)}]
     if image is not None:
@@ -83,9 +93,14 @@ def _structured(
         # Another endpoint may think by default, out of the same max_tokens: a 200-token call then
         # comes back with no text at all. Anthropic thinks only when asked.
         extra["thinking"] = {"type": "disabled"}
+    if writer_api() == "openai":
+        # An OpenAI model reasons by default, out of max_tokens too; the effort is its own setting.
+        effort = answer_reasoning() if answering else writer_reasoning()
+        if effort:
+            extra["reasoning"] = effort
     try:
         response = writer.messages.create(
-            model=model or writer_model(),
+            model=answer_model() if answering else writer_model(),
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": content}],
@@ -139,6 +154,15 @@ def _image_block(image: Image.Image) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}}
 
 
+@dataclass(frozen=True)
+class Fill:
+    """What goes into the focused field: the exact text, empty when the writer declined, and whether
+    Return follows it."""
+
+    text: str
+    submit: bool = False
+
+
 def compose_text(
     writer: Writer,
     goal: str,
@@ -146,8 +170,10 @@ def compose_text(
     items: list[Item],
     history: list[str],
     guidance: Guidance | None = None,
-) -> str:
-    """The exact string to type into the focused field. Empty means the writer declined."""
+) -> Fill:
+    """The exact string to type into the focused field, and whether to submit it with Return.
+
+    Return never follows text in a text area, where it starts a new line instead."""
     packet = {
         "goal": goal,
         **(guidance.state() if guidance else {}),
@@ -165,13 +191,24 @@ def compose_text(
             "actions, the focused field's label and placeholder, and nearby screen text, and, when "
             "there are any, the step the agent is now working on and what the user said when asked. "
             "Decide the exact string to type. Never invent credentials, passwords, or personal data; for such "
-            "fields, or when the field should not be filled, set fill to false."
+            "fields, or when the field should not be filled, set fill to false. Set submit to true when this "
+            "text completes what the goal asks of the field and Return should confirm it now, as a Save or OK "
+            "button would: a name or value the goal says to create, rename, change, or save, or a search it "
+            "says to run. Set it to false when the form has other fields still to fill, or when the goal only "
+            "needs the text entered. Give the reason before deciding submit."
         ),
         packet=packet,
-        properties={"fill": {"type": "boolean"}, "text": {"type": "string"}, "reason": {"type": "string"}},
+        properties={  # in this order: the reason is written before submit is decided
+            "fill": {"type": "boolean"},
+            "text": {"type": "string"},
+            "reason": {"type": "string"},
+            "submit": {"type": "boolean"},
+        },
         max_tokens=256,
     )
-    return data["text"].strip() if data["fill"] else ""
+    text = data["text"].strip() if data["fill"] else ""
+    multiline = screen.field is not None and screen.field.role == "AXTextArea"
+    return Fill(text, submit=bool(text) and data["submit"] and not multiline)
 
 
 def valid_url(url: str) -> bool:
@@ -311,18 +348,24 @@ ANSWER_SYSTEM = (
     "When the goal is not reached you may keep the run going, in one of two ways and never both. "
     "Set focus to send the classifier back to work: one short imperative sentence naming the next "
     "step in terms of what this screen shows, quoting the text of the item to use when there is "
-    "one. The classifier can click an on-screen item, type into a focused field, press Return or "
-    "Escape, scroll, go back, wait, and open a website; it cannot read, compare, or remember, so a "
-    "focus is one move, not a plan. Never conclude from memory that a setting, feature, or page "
-    "does not exist: apps move and rename them between versions. While the screen still shows a "
-    "place to look, such as a search result, a row marked as matching, a menu, or a section not "
-    "yet opened, give opening it as the focus. Do not give again a focus from earlier_stops that changed "
+    "one. The classifier can click an on-screen item, type into a focused field, replacing what "
+    "the field holds, press Return or Escape, scroll, go back, wait, and open a website by its "
+    "https address; it cannot read, "
+    "compare, or remember, so a focus is one move, not a plan. It has no other key or shortcut and "
+    "cannot right-click, double-click, or select text, so a focus that needs one of those is "
+    "refused: name the button, menu, or link on screen that does the same. Never conclude from "
+    "memory that a setting, feature, or page does not exist: apps move and rename them between "
+    "versions. While the screen still shows a place to look, such as a search result, a row "
+    "marked as matching, a menu, or a section not yet opened, give opening it as the focus. "
+    "Do not give again a focus from earlier_stops that changed "
     "nothing. Set question to ask the user, only when user_can_be_asked is true, and only for what "
     "the screens cannot tell you and the goal leaves open: a choice between options the user would "
     "care about, or a fact only the user has. One short question. Never ask for a password or any "
     "other credential, and never ask what user_said already answers. Leave both empty when the "
     "goal is reached, when no action of the agent's would help, or when the next step is one only "
-    "the user should take, such as a login or a payment."
+    "the user should take, such as a login or a payment. When the run ends short of the goal, "
+    "because you leave both empty or because why_the_run_stopped says it ends, say plainly what "
+    "the agent could not do."
 )
 
 
@@ -356,7 +399,9 @@ def compose_answer(
         "user_can_be_asked": can_ask,
         "frontmost_app": screen.app,
         "browser_active_tab_url": screen.url,
-        "screen_text_in_reading_order": [it.text for it in items],
+        "screen_text_in_reading_order": [
+            f"{it.text} (under {screen.covered[it.index].title})" if it.index in screen.covered else it.text for it in items
+        ],
         **({"earlier_screens": earlier} if earlier else {}),
     }
     data = _structured(
@@ -370,7 +415,7 @@ def compose_answer(
             "question": {"type": "string"},
         },
         max_tokens=1024,
-        model=answer_model(),
+        answering=True,
         image=screen.image if writer_vision() else None,
     )
     return Answer(

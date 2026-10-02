@@ -14,7 +14,7 @@ accessibility ─► focused field (role, label, placeholder, value, frame)
 AppleScript   ─► frontmost app and pid, active tab URL
 clock         ─► local date and time
 dates.py      ─► "dated 2026-10-13 (in 27 days)" on any block containing a date,
-                 "near a line dated ..." on its neighbours
+                 "near a line dated ..." on its neighbours, none from the menu bar's clock
 layout        ─► "in the row of ..." on any label that appears more than once
 runner.py     ─► the actions already tried on this same screen, each of which led back here
                      │
@@ -32,11 +32,25 @@ runner.py     ─► the actions already tried on this same screen, each of whic
 ```
 
 Items carry where they came from: `ocr` for a text block, `ax` for a control the app
-declared, `ax+ocr` when both found the same thing. An `ax` item reads as
+declared, `ax+ocr` when both found the same thing. A symbol OCR reads off a button or
+link, `←` on Back or `☆` on the bookmark star, is that control's icon, and the control
+stands for it: two options for one click would only split the vote. An `ax` item reads as
 `button 'Share' (top-right)` in the criteria, so the classifier can tell a real control
 from a line of text. A label that appears more than once carries its row as well:
 `'Buy' (middle-right; in the row of 'Coldplay', 'Oct 2')`, since the label says nothing
-about which and the layout does.
+about which and the layout does. Text read inside the focused one-line field is not an
+item: it is the field's value or placeholder, the state carries the value, and the field
+is an item of its own when the app declares it. A text area keeps its lines.
+
+A control under a popup says which: `button 'Organise' (top-right; under 'Restore pages?')`.
+Chrome draws its bubbles, menus, and dialogs as windows of their own, in front of the page, so a
+click on the page there lands on the popup. Picking such an item closes the popup first, with its
+own close button, or with Escape when it has none, and never with its other buttons ('Restore'
+reopens the last session), then clicks the item, in the same step. Only OSWorld's tree marks
+these. A Mac or Windows item that came from the tree is pressed through it, which reaches the
+control under a popup anyway. "Under", not "covered by": in a replay of 81 captured requests
+from screens with a popup, "covered by" drew the classifier toward Escape and lowered its
+confidence, while "under" left both as they were.
 
 Splitting the decision into three questions keeps screen noise out of the action
 choice. Every stall found while building this came from two options that meant the
@@ -113,10 +127,10 @@ on the app, and the node and time caps bind first on a big tree: Notes and Chrom
 
 | key | does |
 |---|---|
-| `click_item` | press the element through the accessibility tree when the item came from it, so the press lands on the control rather than on whatever covers it; a mouse click at the center of the box otherwise, and as the fallback when the press is refused |
+| `click_item` | press the element through the accessibility tree when the item came from it, so the press lands on the control rather than on whatever covers it; a mouse click at the center of the box otherwise, and as the fallback when the press is refused, after closing the popup in front of it when there is one |
 | `press_offscreen` | `AXPress` a labelled control the app exposes but does not show, chosen from the off-screen list; offered only when that list is not empty, and a refusal counts as a no-op since there is no pixel to fall back on |
 | `use_browser` | go to the browser, showing the website the `site` answer names: `none` brings it forward on the page already open there, a `SITES` catalog key opens that URL through AppleScript `open location`, and `other` opens a URL the writer proposes |
-| `type_text` | the writer composes the string; it is set on the focused element through the accessibility tree, with keystrokes as the fallback when the value does not read back, and a TypeSafe Noul then checks the field's value |
+| `type_text` | the writer composes the string; it is set on the focused element through the accessibility tree, with keystrokes as the fallback when the value does not read back, and a TypeSafe Noul then checks the field's value; text the writer submits gets Return at once instead, and the next screen is the check |
 | `type_email` | fills in `$CLICKER_EMAIL` the same way; refused unless a text field is focused |
 | `press_enter`, `press_escape` | keyboard |
 | `go_back` | Cmd-[, the browser's Back, when the last click led somewhere unhelpful |
@@ -131,7 +145,7 @@ small packet and a structured reply. Each packet also carries the current focus 
 the user said, once there are any:
 
 - **`type_text`** receives the goal, recent actions, the focused field's label and
-  placeholder, and the OCR lines near the field. It returns `{fill, text}`. Credential
+  placeholder, and the OCR lines near the field. It returns `{fill, text, submit}`. Credential
   fields come back `fill: false` and nothing is typed. The text is set as the field's
   value where the element accepts one; otherwise the field is emptied and the text
   typed, since keystrokes land after whatever it already holds. After typing, a Noul
@@ -140,6 +154,10 @@ the user said, once there are any:
   exactly the text just typed. When the element refuses the value, is gone, or holds
   something else by then, the unverified text stays in the field and the history line
   says so. Recovery never presses keys: the focus may have moved to another field.
+  `submit` is for a name or value the goal says to create, rename, change, or save, or a
+  search it says to run. Then Return follows the text and nothing checks the field, since Return
+  usually takes it away; the next screen shows whether it took. A text area never gets
+  Return: there it starts a new line.
 - **`use_browser`** with `site: other` receives the goal and returns `{ok, url}`.
   Code rejects anything that is not a clean https URL with a hostname.
 - **The answer**, each time the classifier stops. It receives the goal, every action
@@ -149,9 +167,11 @@ the user said, once there are any:
   screens before it, newest first up to 600 lines, because the goal may ask for a price
   that was on the listing and not on the checkout. It returns `{achieved, answer, focus, question}`,
   and is told to take the answer from those screens and the user's replies alone, to give a focus
-  as one move and not a plan, and never to ask for a credential. When an action ran after the last capture, the
-  screen is captured again first. This one call uses `CLICKER_ANSWER_MODEL`, a stronger
-  reader than the per-step writer.
+  as one move and not a plan, and only a move the agent has: no shortcut, right-click, or text
+  selection (typing replaces what a field holds), and a website only by its https address. It
+  never asks for a credential, and when the run ends short of the goal it says what the agent
+  could not do. When an action ran after the last capture, the screen is captured again first.
+  This one call uses `CLICKER_ANSWER_MODEL`, a stronger reader than the per-step writer.
 
 Passwords are never typed. Rely on the browser's password manager or an SSO button
 the OCR can read.
@@ -176,6 +196,8 @@ row that were already taken on the same screen earlier in the run (a click that 
 nothing, or a cycle through two pages). Two captures count as the same screen when at most
 one line differs, and that one is one line in ten or fewer: a clock or a ticker does not
 hide a stall, and a two-line modal on a dense page is not mistaken for nothing happening.
+The memory figure Chromium adds to a tab's name ("Settings - Memory usage - 56.0 MB") is left
+out of the comparison, since it drifts between two captures of one screen.
 When more than that changes every step, a run that is getting nowhere runs to `--steps`:
 the rules err toward running on, never toward stopping a run that is making progress.
 
@@ -204,8 +226,11 @@ The writer never picks a click: every action is still the classifier's.
 The exchange cannot go round on itself. A focus the classifier takes no action under
 leaves the answer it came with standing, without a second reading of the same screen.
 `--handoffs` (10) bounds the trips, three questions bound the asking, and a stop on
-the last step is final. A `done` the writer does not see on the screen is sent back
-like any other stop.
+the last step is final. So is a third stall with no new page since the first: two focuses
+did not free the classifier, so the run ends `stuck`, and the writer's answer says what
+the agent could not do. On OSWorld's Chrome tasks every run that stalled a third time on
+the same pages failed anyway, up to 210 s later, and no solved run stalled more than twice.
+A `done` the writer does not see on the screen is sent back like any other stop.
 
 ## Who did the work
 

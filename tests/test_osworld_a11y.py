@@ -1,5 +1,6 @@
 """OSWorld's Ubuntu accessibility tree, read offline from a hand-written fixture in its format."""
 
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -235,6 +236,125 @@ def test_the_settings_sidebar_entries_are_controls_each_with_its_own_frame(setti
     assert not any(n.pressable or n.ref is not None for n in found.values())
 
 
+NO_ACTIVE_WINDOW = Path(__file__).parent / "fixtures" / "osworld" / "ubuntu-chrome-no-active-window-captured.xml"
+
+
+@pytest.fixture
+def no_active_window():
+    return a11y.parse(NO_ACTIVE_WINDOW.read_text())
+
+
+def test_with_no_window_active_the_focus_is_the_field_in_the_app_holding_it(no_active_window):
+    """OSWorld's chrome/2ae9ba84: GNOME Shell's window, focused in every tree and after Chrome in this
+    one, passed for the focused field, so jev refused to type into Chrome's focused Name field and
+    clicked it seven more times instead."""
+    assert a11y.active_window(no_active_window) is None
+    assert a11y.name(a11y.active_app(no_active_window)) == "Google Chrome"
+    field = a11y.focused_field(no_active_window)
+    assert (field.role, field.label, field.value) == ("AXTextField", "Name", "Person 1")
+    assert field.is_text
+    assert (field.x, field.y, field.w, field.h) == (717.0, 331.0, 269.0, 17.0)
+
+
+def test_the_shells_focused_window_does_not_make_it_the_active_app_wherever_it_falls(no_active_window):
+    shell = next(app for app in no_active_window if a11y.name(app) == "gnome-shell")
+    no_active_window.remove(shell)
+    no_active_window.insert(0, shell)
+    assert a11y.name(a11y.active_app(no_active_window)) == "Google Chrome"
+    assert a11y.focused_field(no_active_window).label == "Name"
+
+
+def test_with_nothing_else_focused_the_shell_still_holds_the_focus(no_active_window):
+    focused = f"{{{a11y.NS_STATE}}}focused"
+    (name,) = [e for e in no_active_window.iter("entry") if e.get(focused) == "true"]
+    del name.attrib[focused]
+    assert a11y.name(a11y.active_app(no_active_window)) == "gnome-shell"
+    assert a11y.focused_field(no_active_window).role == "window"
+
+
+RESTORE_BUBBLE = Path(__file__).parent / "fixtures" / "osworld" / "ubuntu-chrome-restore-bubble-captured.xml"
+
+
+@pytest.fixture
+def restore_bubble():
+    return a11y.parse(RESTORE_BUBBLE.read_text())
+
+
+def test_the_page_control_under_the_restore_bubble_is_covered_by_it(restore_bubble):
+    """OSWorld's chrome/2ad9387a: the bookmark manager's Organise button lies under the bubble's Close
+    button. jev clicked Organise, which closed the bubble, saw no menu, and took two steps to recover."""
+    found = a11y.walk(a11y.active_app(restore_bubble), *DISPLAY)[0]
+    (organise,) = [n for n in found if n.covered_by is not None]
+    assert (organise.role, organise.label) == ("AXButton", "Organise")
+    bubble = organise.covered_by
+    assert (bubble.name, bubble.x, bubble.y, bubble.w, bubble.h) == ("Restore pages?", 1592.0, 103.0, 334.0, 260.0)
+    assert bubble.title == "'Restore pages?'"
+    close = bubble.close
+    assert (close.role, close.label, close.x, close.y, close.w, close.h) == ("AXButton", "Close", 1879.0, 128.0, 24.0, 22.0)
+
+
+def test_the_bubbles_own_controls_are_not_covered_though_chrome_lists_the_bubble_twice(restore_bubble):
+    """Chrome lists the bubble inside the browser window as well as beside it."""
+    assert len(list(restore_bubble.iter("alert"))) == 2
+    found = a11y.walk(a11y.active_app(restore_bubble), *DISPLAY)[0]
+    own = [n for n in found if 1592 <= n.x < 1926 and 103 <= n.y < 363 and n.label != "Organise"]
+    assert sorted(n.label for n in own) == [
+        "Close",
+        "Help make Google Chrome better by sending crash reports and usage statistics to Google",
+        "Restore",
+        "statistics",
+        "usage",
+    ]
+    assert all(n.covered_by is None for n in own)
+
+
+def chrome_with(*windows: str) -> ET.Element:
+    """Chrome's browser window with a Save button centred on (900, 400), and `windows` listed after it."""
+    return a11y.parse(
+        f'<desktop-frame xmlns:st="{a11y.NS_STATE}" xmlns:cp="{a11y.NS_COMPONENT}"><application name="Google Chrome">'
+        '<frame name="Page - Google Chrome" st:active="true" cp:screencoord="(0, 0)" cp:size="(1920, 1080)">'
+        '<push-button name="Save" cp:screencoord="(880, 390)" cp:size="(40, 20)"/></frame>'
+        f"{''.join(windows)}</application></desktop-frame>"
+    )
+
+
+def save(tree: ET.Element):
+    return next(n for n in a11y.walk(a11y.active_app(tree), *DISPLAY)[0] if n.label == "Save")
+
+
+def window(tag: str, name: str, x: int, *controls: str) -> str:
+    """A window 300x200 with its top-left corner at (x, 300)."""
+    return f'<{tag} name="{name}" cp:screencoord="({x}, 300)" cp:size="(300, 200)">{"".join(controls)}</{tag}>'
+
+
+def control(tag: str, name: str) -> str:
+    return f'<{tag} name="{name}" cp:screencoord="(820, 320)" cp:size="(200, 30)"/>'
+
+
+def test_a_popup_with_no_close_button_is_closed_some_other_way_and_close_this_profile_is_not_one():
+    covered_by = save(chrome_with(window("alert", "Profile", 800, control("push-button", "Close this profile")))).covered_by
+    assert covered_by.name == "Profile" and covered_by.close is None
+
+
+def test_a_nameless_window_with_a_control_is_a_popup_and_the_last_one_listed_is_on_top():
+    """A menu is a nameless frame, opened after the bubble under it."""
+    tree = chrome_with(
+        window("alert", "Restore pages?", 800, control("push-button", "Restore")),
+        window("frame", "", 750, control("menu-item", "Settings")),
+    )
+    popup = save(tree).covered_by
+    assert (popup.name, popup.title, popup.x) == ("", "a popup", 750.0)
+
+
+def test_a_window_with_no_control_covers_nothing():
+    """Chrome's status bubble shows a link's address in a nameless window, and moves off the pointer."""
+    assert save(chrome_with(window("frame", "", 800, control("static", "https://example.com/")))).covered_by is None
+
+
+def test_a_control_beside_a_popup_is_not_covered_by_it():
+    assert save(chrome_with(window("dialog", "Bookmark added", 1000, control("push-button", "Done")))).covered_by is None
+
+
 def test_a_node_that_answers_a_click_is_a_control_and_one_that_only_has_a_default_is_not():
     tree = a11y.parse(
         f'<desktop-frame xmlns:st="{a11y.NS_STATE}" xmlns:cp="{a11y.NS_COMPONENT}" xmlns:act="{a11y.NS_ACTION}">'
@@ -248,3 +368,17 @@ def test_a_node_that_answers_a_click_is_a_control_and_one_that_only_has_a_defaul
     )
     found = a11y.walk(a11y.active_app(tree), *DISPLAY)[0]
     assert [(n.role, n.label) for n in found] == [("section", "Row"), ("AXMenuItem", "Settings")]
+
+
+@pytest.mark.parametrize(("lines", "role"), [("multi_line", "AXTextArea"), ("single_line", "AXTextField")])
+def test_a_multi_line_entry_is_a_text_area_as_on_a_mac(lines, role):
+    """A `textarea` is an entry that says it is multi-line: its lines are content, not one value."""
+    tree = a11y.parse(
+        f'<desktop-frame xmlns:st="{a11y.NS_STATE}" xmlns:cp="{a11y.NS_COMPONENT}">'
+        '<application name="Google Chrome"><frame name="Chrome" st:active="true" cp:screencoord="(0, 0)" cp:size="(800, 600)">'
+        f'<entry name="Comment" st:focused="true" st:{lines}="true" cp:screencoord="(10, 10)" cp:size="(400, 120)"/>'
+        "</frame></application></desktop-frame>"
+    )
+    field = a11y.focused_field(tree)
+    assert (field.role, field.label) == (role, "Comment")
+    assert field.is_text

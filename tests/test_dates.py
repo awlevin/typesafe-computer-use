@@ -43,3 +43,14 @@ def test_neighbours_inherit_nearest_date(screen, make_item):
     assert hints[1] == "near a line dated 2026-10-13 (in 27 days)"
     assert hints[3] == "near a line dated 2026-11-04 (in 49 days)"
     assert 4 not in hints
+
+
+def test_the_menu_bar_clock_dates_nothing(screen, make_item):
+    items = [
+        make_item(0, "Sep 16 01:54", x1=950, x2=1040, y1=8, y2=30),  # the clock, in the strip along the top
+        make_item(1, "Settings - Memory usage", y1=66, y2=108),  # a tab just under it
+        make_item(2, "Coldplay | Oct 2", y1=600, y2=630),
+        make_item(3, "Buy", y1=640, y2=670),
+    ]
+    hints = date_hints(items, screen, TODAY)
+    assert hints == {2: "dated 2026-10-02 (in 16 days)", 3: "near a line dated 2026-10-02 (in 16 days)"}

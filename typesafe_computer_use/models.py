@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, fields, replace
 
 from PIL import Image
 
 TEXT_ROLES = {"AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"}
 Box = tuple[float, float, float, float]  # x1, y1, x2, y2 in capture pixels
+MENU_BAR_PT = 40.0  # the strip along the top of the display, above every window: the menu bar, or Ubuntu's top bar
 
 # Accessibility roles as one human word. Anything unlisted is "other".
 ROLE_WORDS = {
@@ -80,6 +82,10 @@ Signature = tuple[
 LINES_PER_DIFFERENCE = 10  # a screen is the same when at most one line in ten differs...
 MAX_DIFFERING_LINES = 1  # ...and at most one line at all: a clock, a ticker, or an OCR slip
 ROW_PT = 20.0  # the row a line sits in, in screen points: coarse enough to survive OCR jitter, fine enough to see a scroll
+# Chromium names a tab by its title and, while the hover card shows memory, the memory the tab uses:
+# "Settings - Memory usage - 56.0 MB", or "High memory usage". The figure drifts between two
+# captures of one screen, and with the clock it makes two changed lines, so it is left out.
+TAB_MEMORY = re.compile(r" - (?:high )?memory usage - [\d.,]+ ?[kmgt]?b$", re.IGNORECASE)
 
 
 def signature(screen: Screen, items: list[Item]) -> Signature:
@@ -88,11 +94,12 @@ def signature(screen: Screen, items: list[Item]) -> Signature:
 
     A click that only moves the focus changes no text, but it changes what the next action can do,
     so it counts. A scroll on a dense page keeps nine tenths of the text and moves all of it, so the
-    row counts too: the same line lower down is a different line.
+    row counts too: the same line lower down is a different line. A tab's memory figure is no part
+    of the screen (see TAB_MEMORY).
     """
     focused = f"{screen.field.role}:{screen.field.label}" if screen.field else None
     row = ROW_PT * screen.scale
-    return (screen.app, screen.url, focused, tuple((it.text, round(it.center[1] / row)) for it in items))
+    return (screen.app, screen.url, focused, tuple((TAB_MEMORY.sub("", it.text), round(it.center[1] / row)) for it in items))
 
 
 def same_screen(a: Signature, b: Signature) -> bool:
@@ -143,7 +150,8 @@ class AxNode:
     """One actionable accessibility element, in screen points.
 
     `ref` is the element itself, the handle an action is sent to. It is opaque here and
-    stays out of equality and repr so a node compares as the facts it reports.
+    stays out of equality and repr so a node compares as the facts it reports. `covered_by` is the
+    popup in front of it, when a click on its center would land on that popup instead.
     """
 
     role: str
@@ -154,10 +162,36 @@ class AxNode:
     h: float
     pressable: bool
     ref: object | None = field(default=None, compare=False, repr=False)
+    covered_by: Popup | None = None
 
     @property
     def role_word(self) -> str:
         return ROLE_WORDS.get(self.role, "other")
+
+
+@dataclass(frozen=True)
+class Popup:
+    """A window in front of the page, in screen points: a bubble, a menu, or a dialog.
+
+    A click on the page under it lands on it instead, so what it covers is reached by closing it
+    first. `close` is its own close button, when it has one, and never any of its other buttons:
+    the other button on Chrome's "Restore pages?" bubble restores the last session's tabs.
+    """
+
+    name: str
+    x: float
+    y: float
+    w: float
+    h: float
+    close: AxNode | None = None
+
+    @property
+    def title(self) -> str:
+        """How a line of text names it: its name quoted, or what it is when it has none."""
+        return repr(self.name) if self.name else "a popup"
+
+    def holds(self, point: tuple[float, float]) -> bool:
+        return self.x <= point[0] < self.x + self.w and self.y <= point[1] < self.y + self.h
 
 
 @dataclass(frozen=True)
@@ -207,6 +241,7 @@ class Screen:
     window: tuple[float, float, float, float] | None = None  # frontmost window, x/y/w/h in points; None in replay
     ax_refs: dict[int, object] = field(default_factory=dict)  # item index -> accessibility element, when it has one
     offscreen: list[AxNode] = field(default_factory=list)  # labelled controls the app exposes but does not show
+    covered: dict[int, Popup] = field(default_factory=dict)  # item index -> the popup a click on it would land on
 
     @property
     def size_pt(self) -> tuple[float, float]:
@@ -222,6 +257,10 @@ class Screen:
         col = ["left", "center", "right"][max(0, min(2, int(3 * cx / self.image.width)))]
         row = ["top", "middle", "bottom"][max(0, min(2, int(3 * cy / self.image.height)))]
         return f"{row}-{col}"
+
+    def in_menu_bar(self, item: Item) -> bool:
+        """Whether the item sits in the strip along the top of the display, where the clock is."""
+        return item.center[1] < MENU_BAR_PT * self.scale
 
     def to_points(self, item: Item) -> tuple[float, float]:
         cx, cy = item.center

@@ -39,6 +39,23 @@ def test_a_clock_or_a_ticker_does_not_make_a_new_screen():
     assert LINES_PER_DIFFERENCE == 10
 
 
+def test_a_tabs_memory_figure_does_not_make_a_new_screen(screen, make_item):
+    """OSWorld's Chrome names each tab with the memory it uses, and the figure drifts from one capture
+    to the next. With the clock that was two changed lines, and a click that did nothing looked like one
+    that did."""
+
+    def capture(tab: str, clock: str):
+        lines = [tab, clock, *[f"Setting {n}" for n in range(9)]]
+        return signature(screen, [make_item(n, text, y1=100 + 40 * n, y2=130 + 40 * n) for n, text in enumerate(lines)])
+
+    before = capture("Settings - Memory usage - 56.0 MB", "Sep 29 03:07")
+    assert same_screen(before, capture("Settings - Memory usage - 57.3 MB", "Sep 29 03:08"))
+    assert same_screen(before, capture("Settings - High memory usage - 1.2 GB", "Sep 29 03:08"))
+    assert before[3][0] == ("Settings", 3)
+    assert not same_screen(before, capture("Downloads - Memory usage - 56.0 MB", "Sep 29 03:08"))  # another tab is a change
+    assert signature(screen, [make_item(0, "Memory usage - 56.0 MB")])[3][0][0] == "Memory usage - 56.0 MB"  # page text stays
+
+
 def test_a_small_modal_on_a_dense_page_is_a_new_screen():
     lines = [f"Row {n}" for n in range(40)]
     page = ("Google Chrome", None, None, texts(*lines))

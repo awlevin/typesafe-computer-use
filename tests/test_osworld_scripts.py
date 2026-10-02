@@ -152,6 +152,42 @@ def test_the_cloud_run_records_its_rows_with_the_git_state_it_synced(tmp_path):
     assert '"git_commit"' in line and '"git_dirty"' in line and '"command": "run-jev chrome/a --ocr rapidocr"' in line
 
 
+def provenance(repo: Path) -> dict:
+    """scripts/osworld-gcp's provenance(), run alone in `repo`, as the JSON it prints."""
+    unsynced = re.search(r"^UNSYNCED=\(.*\)$", OSWORLD_GCP.read_text(), re.M)
+    assert unsynced, "osworld-gcp has no UNSYNCED"
+    source = "\n".join(function(OSWORLD_GCP, name) for name in ("provenance", "diff_digest"))
+    out = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail; INSTANCE=m\n{unsynced.group(0)}\n{source}\nprovenance run1 'run-luna chrome/a'"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=repo,
+    )
+    return json.loads(out.stdout)
+
+
+def test_a_run_reads_as_changed_for_new_code_but_not_for_the_rows_of_earlier_runs(tmp_path):
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(tmp_path), *args], capture_output=True, check=True)
+
+    git("init", "-q")
+    (tmp_path / "code.py").write_text("x = 1\n")
+    git("add", "code.py")
+    git("-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "code")
+    rows = tmp_path / "benchmarks" / "osworld"
+    rows.mkdir(parents=True)
+    (rows / "20260928T060716Z.jsonl").write_text('{"score": 1.0}\n')
+
+    clean = provenance(tmp_path)
+    assert (clean["git_dirty"], clean["git_diff_sha256"]) == (False, None), "a rows file is a record, not code"
+    assert clean["command"] == "run-luna chrome/a" and clean["machine"] == "m"
+
+    (tmp_path / "code.py").write_text("x = 2\n")
+    changed = provenance(tmp_path)
+    assert changed["git_dirty"] is True and re.fullmatch(r"[0-9a-f]{64}", changed["git_diff_sha256"])
+
+
 def test_attach_follows_the_newest_run_and_cancel_stops_its_whole_session(tmp_path):
     assert "tail -n +1 -F --pid=4242 /opt/typesafe-computer-use/.osworld/runs/20260101T000000Z.log" in dry_run(
         tmp_path / "a", "attach"
@@ -171,3 +207,148 @@ def test_the_cloud_run_needs_a_task(tmp_path):
     with pytest.raises(subprocess.CalledProcessError) as failed:
         dry_run(tmp_path, "run-jev", "--ocr", "rapidocr")
     assert "usage: scripts/osworld-gcp run-jev DOMAIN/ID... --ocr OCR" in failed.value.stderr
+
+
+def one_line(script: Path, name: str) -> str:
+    """A shell function written on one line, such as `say() { ...; }`."""
+    match = re.search(rf"^{name}\(\) {{ .* }}$", script.read_text(), re.M)
+    assert match, f"{script.name} has no one-line {name}()"
+    return match.group(0)
+
+
+def stopped_under_run() -> str:
+    match = re.search(r"^STOPPED_UNDER_RUN=(\d+)", OSWORLD_GCP.read_text(), re.M)
+    assert match, "osworld-gcp has no STOPPED_UNDER_RUN"
+    return match.group(1)
+
+
+def follow_with(tmp_path: Path, machine: str) -> subprocess.CompletedProcess:
+    """follow() alone, against a machine SSH cannot reach, which Compute Engine describes as `machine`.
+
+    An empty `machine` is a describe that fails too, as it does with no network here.
+    """
+    shims = tmp_path / "bin"
+    shims.mkdir()
+    describe = f"echo {machine}" if machine else "echo 'network unreachable' >&2; exit 1"
+    (shims / "gcloud").write_text(
+        f'#!/bin/sh\ncase "$*" in\n  *"instances describe"*) {describe} ;;\n  *) echo "connection timed out" >&2; exit 255 ;;\nesac\n'
+    )
+    (shims / "gcloud").chmod(0o755)
+    source = "\n".join(
+        [one_line(OSWORLD_GCP, name) for name in ("say", "show")]
+        + [function(OSWORLD_GCP, name) for name in ("die", "quote", "cmdline", "query", "machine_status", "alive", "follow")]
+    )
+    setup = (
+        "set -euo pipefail; DRY_RUN=false; INSTANCE=osworld; GC=(--project p --zone z); SSH=(gcloud compute ssh osworld)\n"
+        "REMOTE_USER=osworld; REMOTE_DIR=/opt/repo; RUNS_DIR=.osworld/runs; KEEPALIVE=(); RECONNECTS=0\n"
+        f"STOPPED_UNDER_RUN={stopped_under_run()}\n"
+    )
+    return subprocess.run(
+        ["bash", "-c", f'{setup}{source}\nstatus=0; follow run1 4242 || status=$?; echo "follow returned $status"'],
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{shims}:/usr/bin:/bin", "HOME": str(tmp_path)},
+        timeout=30,
+    )
+
+
+@pytest.mark.parametrize("machine", ["TERMINATED", "STOPPING", "SUSPENDED"])
+def test_a_machine_stopped_under_the_run_ends_the_following_at_once(tmp_path, machine):
+    """Google stopped the Spot machine nine minutes into run 20260928T175847Z, and the run with it.
+    A stopped machine cannot be reached, which the follower took for a dropped connection: it tried
+    again for twenty minutes, then gave up without bringing back the tasks that had finished."""
+    out = follow_with(tmp_path, machine)
+    assert out.stdout.strip() == f"follow returned {stopped_under_run()}"
+    assert "the machine stopped during the run" in out.stderr
+    assert "reconnecting" not in out.stderr and "lost the run's output" not in out.stderr
+
+
+@pytest.mark.parametrize("machine", ["RUNNING", ""], ids=["running", "describe fails too"])
+def test_a_machine_that_is_up_or_unknown_is_reconnected_to(tmp_path, machine):
+    """A running machine that does not answer, or no answer about it at all, is a dropped connection."""
+    out = follow_with(tmp_path, machine)
+    assert out.returncode == 1 and "lost the run's output 0 times" in out.stderr
+    assert "the machine stopped during the run" not in out.stderr
+
+
+def test_a_run_the_machine_stopped_under_brings_back_what_finished():
+    """run-jev and attach start the machine again after such a run, before they pull its results."""
+    assert "start_if_stopped" in function(OSWORLD_GCP, "restart_if_stopped_under")
+    attach = re.search(r"^  attach\)\n.*?;;\n", OSWORLD_GCP.read_text(), re.S | re.M)
+    assert attach, "osworld-gcp has no attach command"
+    for body in (function(OSWORLD_GCP, "run_task"), attach.group(0)):
+        assert body.index("restart_if_stopped_under") < body.index("pull_results")
+
+
+def test_a_pull_the_tunnel_drops_is_tried_again(tmp_path):
+    """IAP dropped the pull after run 20260928T184152Z ("rsync: unexpected end of file"), and every
+    one of its ten scored tasks was recorded as no result folder came back."""
+    shims = tmp_path / "bin"
+    shims.mkdir()
+    tries = tmp_path / "tries"
+    (shims / "rsync").write_text(f'#!/bin/sh\necho x >> {tries}\n[ "$(wc -l < {tries})" -ge 3 ]\n')
+    (shims / "rsync").chmod(0o755)
+    source = "\n".join(
+        [one_line(OSWORLD_GCP, name) for name in ("say", "show")]
+        + [function(OSWORLD_GCP, name) for name in ("quote", "cmdline", "run", "pull_results")]
+    )
+    setup = "set -euo pipefail; DRY_RUN=false; INSTANCE=osworld; REMOTE_DIR=/opt/repo; RSYNC=(rsync); sleep() { :; }\n"
+
+    def pull(limit: int) -> subprocess.CompletedProcess:
+        tries.write_text("")
+        return subprocess.run(
+            ["bash", "-c", f'{setup}PULL_TRIES={limit}\n{source}\npull_results && echo pulled || echo "not pulled"'],
+            capture_output=True,
+            text=True,
+            cwd=tmp_path,
+            env={"PATH": f"{shims}:/usr/bin:/bin", "HOME": str(tmp_path)},
+            timeout=30,
+        )
+
+    out = pull(4)
+    assert out.stdout.strip() == "pulled" and len(tries.read_text().split()) == 3
+    assert "trying again (2 of 4)" in out.stderr
+    out = pull(2)
+    assert out.stdout.strip() == "not pulled" and len(tries.read_text().split()) == 2
+
+
+def test_a_run_whose_results_did_not_come_back_records_no_rows(tmp_path):
+    """Rows saying no task came back would be false: the tasks are scored on the machine. The run
+    says how to record them once pull-results has brought them, and ends as failed."""
+    stubs = (
+        "load() { :; }; start_if_stopped() { :; }; wait_for_machine() { :; }; sync_repo() { :; }\n"
+        "archive_local() { :; }; start_detached() { echo 4242; }; follow() { :; }; restart_if_stopped_under() { :; }\n"
+        'run_status() { echo 0; }; provenance() { echo \'{"run": "r"}\'; }; pull_results() { return 1; }\n'
+        "record() { echo RECORDED; }; run() { :; }; SSH=(gcloud); REMOTE_EXEC=osworld-exec\n"
+    )
+    record_line = re.search(r"^RECORD=\(.*\)$", OSWORLD_GCP.read_text(), re.M)
+    assert record_line, "osworld-gcp has no RECORD"
+    source = "\n".join(
+        [one_line(OSWORLD_GCP, name) for name in ("say", "agent_model")]
+        + [record_line.group(0)]
+        + [function(OSWORLD_GCP, name) for name in ("die", "quote", "cmdline", "run_task")]
+    )
+    out = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail; DRY_RUN=false; TASK_PATTERN='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'\n{source}\n{stubs}"
+            'status=0; run_task run-jev chrome/a --ocr rapidocr || status=$?; echo "run_task returned $status"',
+        ],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        timeout=30,
+    )
+    assert out.stdout.strip() == "run_task returned 1", out.stderr
+    assert "the run's rows were not recorded" in out.stderr
+    assert re.search(
+        r"python -m typesafe_computer_use\.osworld\.record benchmarks/osworld/\d{8}T\d{6}Z\.jsonl results jev .*chrome/a$",
+        out.stderr,
+        re.M,
+    )
+
+
+def test_pulling_results_starts_a_stopped_machine(tmp_path):
+    printed = dry_run(tmp_path, "pull-results")
+    assert printed.index("instances start osworld") < printed.index("rsync")

@@ -1,3 +1,5 @@
+import threading
+import time
 from dataclasses import replace
 
 import pytest
@@ -315,3 +317,112 @@ def test_no_cache_always_reads_the_region(reads):
     ocr_lines(capture_of(), None)
     ocr_lines(capture_of(), None)
     assert reads == [(0, 0, 2048, 1024), (0, 0, 2048, 1024)]
+
+
+# ------------------------------------------------------------------ reading ahead of the capture's questions
+
+
+def boxes(found) -> list:
+    """Items or lines by their boxes alone: `reads` names each line by the read that made it."""
+    return [(it.x1, it.y1, it.x2, it.y2) if hasattr(it, "x1") else it[2] for it in found]
+
+
+def read_both_ways(before, after):
+    """`after` read in line, and read ahead of the step, each after `before`: the two caches, and what
+    the step took from each."""
+    in_line, ahead = OcrCache(), OcrCache()
+    for cache in (in_line, ahead):
+        ocr_lines(before, cache)
+    expected = perception.ocr(after, 255, "goal", in_line)
+    ahead.read_ahead(after.image, after.scale)
+    timing: dict[str, float] = {}
+    got = perception.ocr(after, 255, "goal", ahead, timing)
+    return (in_line, expected), (ahead, got), timing
+
+
+def test_a_read_ahead_over_the_same_app_and_window_is_the_read_the_step_takes(reads):
+    before, after = capture_of(), capture_of(boxes=[(300, 300, 400, 400)])
+    (in_line, expected), (ahead, got), timing = read_both_ways(before, after)
+    assert boxes(got) == boxes(expected)
+    assert (ahead.app, ahead.window, ahead.region) == (in_line.app, in_line.window, in_line.region)
+    assert boxes(ahead.lines) == boxes(in_line.lines)
+    assert reads[-2:] == [(0, 0, 768, 768), (0, 0, 768, 768)], "one read in line and one ahead, never a third"
+    assert timing["ocr_ahead"] >= 0.0 and timing["ocr_rects"] == 1
+
+
+def test_a_read_ahead_over_a_window_that_moved_is_thrown_away_and_the_step_reads_again(reads):
+    before = capture_of()
+    after = replace(capture_of(), window=(20.0, 0.0, 1024.0, 512.0))
+    (in_line, expected), (ahead, got), timing = read_both_ways(before, after)
+    assert boxes(got) == boxes(expected) and ahead.window == in_line.window == (20.0, 0.0, 1024.0, 512.0)
+    assert "ocr_ahead" not in timing
+    assert reads[-1] == (24, 0, 2048, 1024), "the step read the moved window's own region"
+
+
+def test_nothing_is_read_ahead_of_the_first_capture(reads):
+    cache = OcrCache()
+    first = capture_of()
+    cache.read_ahead(first.image, first.scale)
+    assert reads == [] and cache.take_ahead(first) is None
+
+
+def test_the_ocr_engine_never_reads_two_captures_at_once(monkeypatch):
+    """A read ahead that the step never took is waited out before the next one starts, and a read
+    ahead the step throws away is over before the step reads again."""
+    active, most = [0], [0]
+    lock = threading.Lock()
+
+    def slow_crop(image, rect):
+        with lock:
+            active[0] += 1
+            most[0] = max(most[0], active[0])
+        time.sleep(0.05)
+        with lock:
+            active[0] -= 1
+        return [line("text", rect[0], rect[1], rect[0] + 10, rect[1] + 10)]
+
+    monkeypatch.setattr(perception, "ocr_crop", slow_crop)
+    cache = OcrCache()
+    ocr_lines(capture_of(), cache)
+    changed = capture_of(boxes=[(300, 300, 400, 400)])
+    cache.read_ahead(changed.image, changed.scale)
+    cache.read_ahead(changed.image, changed.scale)  # the capture before it was never read
+    perception.ocr(replace(changed, window=(20.0, 0.0, 1024.0, 512.0)), 255, "goal", cache)
+    assert most[0] == 1
+
+
+def test_a_read_ahead_that_raised_leaves_the_step_to_read_and_raise_itself(monkeypatch):
+    calls = []
+
+    def broken(image, rect):
+        calls.append(threading.current_thread().name)
+        raise RuntimeError("the OCR engine broke")
+
+    cache = OcrCache()
+    monkeypatch.setattr(perception, "ocr_crop", lambda image, rect: [line("text", 0, 0, 10, 10)])
+    ocr_lines(capture_of(), cache)
+    monkeypatch.setattr(perception, "ocr_crop", broken)
+    changed = capture_of(boxes=[(300, 300, 400, 400)])
+    cache.read_ahead(changed.image, changed.scale)
+    with pytest.raises(RuntimeError, match="the OCR engine broke"):
+        perception.ocr(changed, 255, "goal", cache)
+    assert calls == ["jev-ocr-ahead", threading.current_thread().name]
+
+
+def test_capture_starts_the_read_before_it_asks_which_app_and_window_it_shows(monkeypatch):
+    events = []
+    image = painted()
+    cache = OcrCache()
+    monkeypatch.setattr(perception, "ocr_crop", lambda image, rect: [line("text", 0, 0, 10, 10)])
+    ocr_lines(capture_of(), cache)
+    monkeypatch.setattr(cache, "read_ahead", lambda image, scale: events.append("read ahead"))
+    monkeypatch.setattr(desktop, "screenshot", lambda: image)
+    monkeypatch.setattr(desktop, "display_scale", lambda image: 2.0)
+    monkeypatch.setattr(desktop, "frontmost_app_and_pid", lambda: events.append("app") or ("Google Chrome", 7))
+    monkeypatch.setattr(desktop, "frontmost_window_bounds", lambda pid: (0.0, 0.0, 1024.0, 512.0))
+    monkeypatch.setattr(desktop, "focused_field", lambda: None)
+    monkeypatch.setattr(desktop, "browser_url", lambda browser: None)
+    perception.capture(browser="Google Chrome", ahead=cache)
+    assert events == ["read ahead", "app"]
+    perception.capture(browser="Google Chrome")
+    assert events == ["read ahead", "app", "app"], "no cache, no read ahead"

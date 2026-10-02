@@ -1,10 +1,12 @@
 # OSWorld's generic runner with jev as the agent. A copy of OSWorld-V2's
 # scripts/python/run_multienv.py at commit 3d778a3c9a34a079316f70df023b166700445792 (tag
 # osworld-v2.1), changed only to build JevAgent (with the required --ocr), to point it at each
-# task's result folder, to read AWS's image map only for the AWS provider, and to leave OSWorld's
-# proxy off, since it needs credentials of OSWorld's own that this setup lacks. To take an OSWorld
-# update, re-copy that file at the new commit and make the same changes again; each one is marked
-# "jev:".
+# task's result folder, to read AWS's image map only for the AWS provider, to leave OSWorld's
+# proxy off, since it needs credentials of OSWorld's own that this setup lacks, and to hand jev the
+# VM's controller, so jev fetches each observation's accessibility tree itself and OSWorld's
+# observation carries the screenshot alone (--observation_type still names the results folder). To
+# take an OSWorld update, re-copy that file at the new commit and make the same changes again; each
+# one is marked "jev:".
 from __future__ import annotations
 import _repo_path  # noqa: F401
 
@@ -222,14 +224,16 @@ def run_env_tasks(task_queue: Queue, args: argparse.Namespace, shared_scores: li
             screen_size=screen_size,
             headless=args.headless,
             os_type="Ubuntu",
-            require_a11y_tree=args.observation_type in ["a11y_tree", "screenshot_a11y_tree", "som"],
+            require_a11y_tree=False,  # jev: jev fetches the tree itself, of the app in front alone
             enable_proxy=False,  # jev: OSWorld's proxy needs credentials of its own; without them no page loads
             client_password=args.client_password,
             force_disable_vnc=not getattr(args, "enable_vnc", False),
             force_disable_recording=not getattr(args, "enable_recording", False),
         )
         active_environments.append(env)
-        agent = JevAgent(ocr=args.ocr, max_steps=args.max_steps, provider=args.provider_name)  # jev: the agent
+        agent = JevAgent(  # jev: the agent, with the controller it fetches the tree through
+            ocr=args.ocr, max_steps=args.max_steps, provider=args.provider_name, controller=lambda: env.controller
+        )
 
         logger.info(f"Process {current_process().name} started.")
         while True:

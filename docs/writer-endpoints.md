@@ -12,6 +12,8 @@ another endpoint.
 | `CLICKER_WRITER_MODEL` | no | types text and proposes URLs; defaults to `claude-haiku-4-5` |
 | `CLICKER_ANSWER_MODEL` | no | reads the screen whenever the classifier stops; defaults to `claude-sonnet-5` |
 | `CLICKER_WRITER_VISION` | no | `false` for an answer model that reads text only; defaults to `true` |
+| `CLICKER_WRITER_REASONING` | no | the reasoning effort the writer's calls ask an OpenAI-API model for, such as `none`; unset leaves it to the model |
+| `CLICKER_ANSWER_REASONING` | no | the same for the answer model, such as `low` |
 
 ## Other models
 

@@ -17,7 +17,9 @@ class OpenAIWriter:
 
     writer.py builds each request as an Anthropic Messages call and reads text blocks back, so this
     translates both ways, and nothing else in the package knows which API is on the other end.
-    `thinking` is accepted and dropped: Chat Completions has no such switch.
+    `thinking` is accepted and dropped: Chat Completions has no such switch. `reasoning` is the
+    effort an OpenAI reasoning model is asked for, and it is dropped for the rest of the run by an
+    endpoint that refuses it.
     """
 
     def __init__(self, base_url: str, api_key: str):
@@ -26,8 +28,19 @@ class OpenAIWriter:
         self.messages = SimpleNamespace(create=self._create)
         self._formats = list(RESPONSE_FORMATS)  # those this endpoint has not refused yet
         self._token_limit = "max_tokens"  # OpenAI's newer models take max_completion_tokens instead
+        self._reasoning = True  # until the endpoint refuses reasoning_effort
 
-    def _create(self, *, model: str, max_tokens: int, system: str, messages: list[dict], output_config=None, thinking=None):
+    def _create(
+        self,
+        *,
+        model: str,
+        max_tokens: int,
+        system: str,
+        messages: list[dict],
+        output_config=None,
+        thinking=None,
+        reasoning: str | None = None,
+    ):
         chat = [{"role": "system", "content": system}, *(_chat_message(m) for m in messages)]
         schema = output_config["format"]["schema"] if output_config else None
         while True:
@@ -37,11 +50,15 @@ class OpenAIWriter:
                     messages=chat,
                     **{self._token_limit: max_tokens},
                     **_response_format(self._formats[0], schema),
+                    **({"reasoning_effort": reasoning} if reasoning and self._reasoning else {}),
                 )
             except openai.BadRequestError as e:
                 said = str(e).lower()
                 if self._token_limit == "max_tokens" and "max_completion_tokens" in said:
                     self._token_limit = "max_completion_tokens"
+                    continue
+                if reasoning and self._reasoning and "reasoning_effort" in said:
+                    self._reasoning = False
                     continue
                 if len(self._formats) > 1 and any(word in said for word in FORMAT_WORDS):
                     self._formats.pop(0)

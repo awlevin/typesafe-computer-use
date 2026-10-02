@@ -6,6 +6,10 @@ owns its own loop. So `JevAgent` runs `runner.run` as it ships, on a worker thre
 into OSWorld steps (see `desktop.py`): the inputs of one step accumulate, and the first read after
 them hands them to `predict` and waits for the observation OSWorld takes after running them.
 
+Given OSWorld's controller, jev fetches each observation's accessibility tree itself, with a walk
+of the application in front alone (see `tree.py`), and OSWorld's runner asks for the screenshot
+alone. Each capture's OCR then reads the screenshot while the tree comes.
+
 The worker never blocks forever. It is a daemon; once it has handed out `max_steps` action lists,
 OSWorld asks for no more, so its next wait raises `Abort("OSWorld step limit")` instead, and
 `reset()` makes a stale worker's wait raise `Abort("reset")`. Either way `runner.run` records the
@@ -23,6 +27,7 @@ import queue
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from .. import config, runner
@@ -33,6 +38,7 @@ from ..platform_adapter import using
 from ..runner import RunConfig
 from ..writer import Writer, make_writer
 from . import ocr as ocr_backends
+from . import tree
 from .desktop import OSWorldDesktop
 
 BROWSER = "Google Chrome"  # the browser OSWorld's Chrome tasks run
@@ -59,7 +65,9 @@ class JevAgent:
     VM starts. The run folder is `<out_root>/jev`; point `out_root` at the task's result folder
     before each task. `provider` names OSWorld's VM provider, for the record. `writer` is the
     Anthropic-style client for free text and answers: by default whatever the environment
-    configures, as `clicker` builds it, and None runs without one.
+    configures, as `clicker` builds it, and None runs without one. `controller` returns OSWorld's
+    controller of the VM as it stands, since OSWorld makes a new one each time it reverts the VM:
+    with it jev fetches each observation's tree itself, and without it reads the observation's own.
     """
 
     def __init__(
@@ -71,6 +79,7 @@ class JevAgent:
         provider: str | None = None,
         writer: Writer | _FromEnv | None = FROM_ENV,
         step_seconds: float = STEP_SECONDS,
+        controller: Callable[[], tree.Controller] | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError(f"max_steps must be at least 1, not {max_steps}")
@@ -85,6 +94,7 @@ class JevAgent:
         self.writer = writer
         self.email = config.email()
         self.step_seconds = step_seconds
+        self.controller = controller
         self._run: _Run | None = None
         self._stale: threading.Thread | None = None  # a stopped worker that had not finished yet
 
@@ -132,7 +142,9 @@ class _Run:
 
     def __init__(self, agent: JevAgent, instruction: str, after: threading.Thread | None) -> None:
         self.agent = agent
-        self.cfg = RunConfig(goal=instruction, out=agent.out_root / RUN_FOLDER, act=True, steps=agent.max_steps, delay=0)
+        self.cfg = RunConfig(
+            goal=instruction, out=agent.out_root / RUN_FOLDER, act=True, steps=agent.max_steps, delay=0, read_ahead=True
+        )
         self.after = after  # the adapter stack is the process's, so a stale worker must leave it first
         self.to_worker: queue.Queue = queue.Queue()
         self.to_predict: queue.Queue = queue.Queue()
@@ -142,6 +154,8 @@ class _Run:
         self.decision = ""  # the latest decision, as the response line
         self.ended: str | None = None  # the final response, once the run ended
         self.stopped = False
+        self.adapter: OSWorldDesktop | None = None
+        self.tree = tree.OSWORLD  # where the run's trees came from, for the record
 
     # ----- the OSWorld side ------------------------------------------------------------------
 
@@ -183,7 +197,14 @@ class _Run:
             if self.after is not None:
                 self.after.join()
             save = self.cfg.out if os.environ.get(SAVE_A11Y) == "1" else None
-            adapter = OSWorldDesktop(obs, self.agent.recognize_text, self._next_obs, save_a11y=save)
+            fetch = None
+            if self.agent.controller is not None:
+                check = tree.checking()
+                fetch = partial(tree.fetch, self.agent.controller(), check=check)
+                self.tree = tree.LIGHT_CHECKED if check else tree.LIGHT
+            adapter = self.adapter = OSWorldDesktop(
+                obs, self.agent.recognize_text, self._next_obs, fetch_tree=fetch, save_a11y=save
+            )
             with using(adapter):
                 state = runner.run(self.cfg, self._context)
             answer = f"; answer: {state.answer.text}" if state.answer is not None else ""
@@ -228,13 +249,22 @@ class _Run:
         return obs
 
     def _record(self) -> None:
-        """Add what the run ran on to jev's run.json: the OCR backend, OSWorld's provider, and the
-        machine's architecture, so results from different machines are never compared by accident."""
+        """Add what the run ran on to jev's run.json: the OCR backend, OSWorld's provider, the
+        machine's architecture, and where the tree came from, so results from different setups are
+        never compared by accident. A run that fetched its own trees adds what they cost and how many
+        fell back to OSWorld's fetch (see `tree.summary`)."""
         path = self.cfg.out / "run.json"
         if not path.is_file():
             return
         summary = json.loads(path.read_text(encoding="utf-8"))
-        summary["osworld"] = {"ocr": self.agent.ocr, "provider": self.agent.provider, "architecture": platform.machine()}
+        fetched = list(self.adapter.fetched) if self.adapter is not None else []
+        summary["osworld"] = {
+            "ocr": self.agent.ocr,
+            "provider": self.agent.provider,
+            "architecture": platform.machine(),
+            "tree": self.tree,
+            **tree.summary(fetched),
+        }
         path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 

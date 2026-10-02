@@ -11,6 +11,7 @@ import ast
 import json
 import platform
 import sys
+import threading
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,17 +22,24 @@ from world import FakeTypeSafe, FakeWriter, scripted
 
 from typesafe_computer_use import runner
 from typesafe_computer_use.decide import Decision
-from typesafe_computer_use.osworld import ocr
+from typesafe_computer_use.osworld import ocr, tree
 from typesafe_computer_use.osworld.agent import SAVE_A11Y, JevAgent, describe
 from typesafe_computer_use.osworld.desktop import APP_PID, OSWorldDesktop
 from typesafe_computer_use.platform_adapter import current, host
 
 FIXTURE = (Path(__file__).parent / "fixtures" / "osworld" / "ubuntu-chrome.xml").read_text()
+NO_ACTIVE_WINDOW = Path(__file__).parent / "fixtures" / "osworld" / "ubuntu-chrome-no-active-window-captured.xml"
+RESTORE_BUBBLE = Path(__file__).parent / "fixtures" / "osworld" / "ubuntu-chrome-restore-bubble-captured"
 DISPLAY = (1920, 1080)
 GOAL = "open Gmail"
 STEP_SECONDS = 10.0
 CLICK_GMAIL = "pyautogui.click(1660, 146)"  # the center of the Gmail link's frame, (1640, 134, 40, 24)
 CLEAR = "pyautogui.hotkey('ctrl', 'a'); pyautogui.press('delete')"
+
+
+def typed(text: str) -> str:
+    """The one action that empties the focused field and types `text` into it."""
+    return f"{CLEAR}\npyautogui.write({text!r}, interval=0.02)"
 
 
 def png(size: tuple[int, int] = DISPLAY) -> bytes:
@@ -109,7 +117,7 @@ def test_a_click_decision_becomes_one_pyautogui_click(jev, tmp_path):
     summary = run_json(tmp_path)
     assert summary["outcome"] == "done"
     assert summary["history"][0].startswith("clicked 'Gmail'")
-    assert summary["osworld"] == {"ocr": "fake", "provider": "docker", "architecture": platform.machine()}
+    assert summary["osworld"] == {"ocr": "fake", "provider": "docker", "architecture": platform.machine(), "tree": "osworld"}
     assert (tmp_path / "jev" / "step-001-raw.png").exists(), "jev's usual run folder, so a step replays"
 
 
@@ -148,11 +156,11 @@ def test_a_missing_tree_saves_nothing_but_still_counts(tmp_path):
     assert sorted(path.name for path in tmp_path.iterdir()) == ["obs-001-a11y.xml"]
 
 
-def test_typing_and_its_check_split_into_two_steps_at_the_read(jev, tmp_path):
+def test_typing_is_one_action_and_its_check_reads_the_step_after_it(jev, tmp_path):
     agent = jev(scripted(("type_text", None)), writer=FakeWriter(text="hello world"))
 
     response, actions = agent.predict(GOAL, obs())
-    assert actions == [CLEAR, "pyautogui.write('hello world', interval=0.02)"]
+    assert actions == [typed("hello world")], "emptying the field and typing are one OSWorld step"
     assert response == "type_text (0.90)"
 
     # The check after typing reads this observation, and so does the next step's capture.
@@ -164,6 +172,57 @@ def test_typing_and_its_check_split_into_two_steps_at_the_read(jev, tmp_path):
     assert summary["history"] == ["typed 'hello world' into 'Address and search bar' via keystrokes (verified 0.95)"]
     second = json.loads((tmp_path / "jev" / "step-002-answers.json").read_text())
     assert second["url"] == "hello world"
+
+
+def test_typing_goes_into_the_focused_field_when_no_window_is_active(jev, tmp_path):
+    """OSWorld's chrome/2ae9ba84 answered "type_text refused: no text field is focused" while Chrome's
+    Name field had the focus and no window was marked active, as in this tree from that run."""
+    tree = NO_ACTIVE_WINDOW.read_text()
+    agent = jev(scripted(("type_text", None)), writer=FakeWriter(text="Thomas"))
+
+    response, actions = agent.predict("change the Chrome profile name to Thomas", obs(tree))
+    assert actions == [typed("Thomas")]
+    assert response == "type_text (0.90)"
+
+    assert agent.predict(GOAL, obs(tree.replace(">Person 1</entry>", ">Thomas</entry>")))[1] == ["DONE"]
+    assert run_json(tmp_path)["history"] == ["typed 'Thomas' into 'Name' via keystrokes (verified 0.95)"]
+
+
+def test_a_name_the_writer_submits_goes_out_with_its_return_as_one_action(jev, tmp_path):
+    """OSWorld's chrome/2ae9ba84 typed the profile name and never saved it. Return now follows the
+    name in the same step, and nothing reads the field between them."""
+    tree = NO_ACTIVE_WINDOW.read_text()
+    agent = jev(scripted(("type_text", None)), writer=FakeWriter(text="Thomas", submit=True))
+
+    response, actions = agent.predict("change the Chrome profile name to Thomas", obs(tree))
+    assert actions == [f"{typed('Thomas')}\npyautogui.press('enter')"]
+    assert response == "type_text (0.90)"
+
+    assert agent.predict(GOAL, obs(tree))[1] == ["DONE"]
+    assert run_json(tmp_path)["history"] == ["typed 'Thomas' into 'Name' via keystrokes and pressed Return"]
+
+
+def test_an_item_under_a_popup_is_clicked_in_the_action_that_closes_the_popup(jev, tmp_path):
+    """OSWorld's chrome/2ad9387a, from the tree and capture of that run: the "Restore pages?" bubble's
+    Close button sat over the bookmark manager's Organise button. jev clicked Organise, which closed
+    the bubble, saw no menu, and took two more steps to open it. Now the bubble is closed by its Close
+    button and Organise clicked after it, in one action, and never by its Restore button."""
+    captured = {
+        "screenshot": RESTORE_BUBBLE.with_suffix(".png").read_bytes(),
+        "accessibility_tree": RESTORE_BUBBLE.with_suffix(".xml").read_text(),
+        "instruction": GOAL,
+    }
+    agent = jev(scripted(("click_item", "Organise")))
+
+    response, actions = agent.predict("make a bookmarks bar folder called Favorites", captured)
+    assert actions == ["pyautogui.click(1891, 139)\ntime.sleep(0.5)\npyautogui.click(1888, 142)"]
+    assert response == "click_item 'Organise' (0.90)"
+    payload = (tmp_path / "jev" / "step-001-payload.txt").read_text()
+    assert "\"button 'Organise' (top-right; under 'Restore pages?')\"" in payload
+    assert payload.count("under 'Restore pages?'") == 1, "the bubble's own controls are not under it"
+
+    assert agent.predict(GOAL, captured)[1] == ["DONE"]
+    assert run_json(tmp_path)["history"] == ["closed 'Restore pages?' then clicked 'Organise'"]
 
 
 def test_a_wait_is_a_wait_step_and_a_stall_ends_in_done(jev, tmp_path):
@@ -210,6 +269,111 @@ def test_with_no_tree_ocr_alone_carries_the_decision(jev, tmp_path):
     first = json.loads((tmp_path / "jev" / "step-001-answers.json").read_text())
     assert (first["app"], first["url"], first["field"]) == ("", None, None)
     assert [it["text"] for it in first["items"]] == ["Sign in"]
+
+
+# ----- the tree jev fetches itself -------------------------------------------------------------
+
+
+class VM:
+    """OSWorld's controller of a VM whose tree is `xml`: the light walk prints it, unless `broken`."""
+
+    def __init__(self, xml: str = FIXTURE, broken: bool = False) -> None:
+        self.xml, self.broken = xml, broken
+        self.walks = self.full_fetches = 0
+
+    def run_python_script(self, script: str, timeout: float = 90) -> dict:
+        self.walks += 1
+        if self.broken:
+            return {"status": "error", "output": "", "error": "ModuleNotFoundError: No module named 'gi'"}
+        return {"status": "success", "output": self.xml, "error": ""}
+
+    def get_accessibility_tree(self) -> str:
+        self.full_fetches += 1
+        return self.xml
+
+
+def test_given_the_controller_jev_fetches_each_observations_tree_itself(jev, tmp_path, monkeypatch):
+    monkeypatch.delenv("JEV_OSWORLD_TREE_CHECK", raising=False)
+    vm = VM()
+    agent = jev(scripted(("click_item", "Gmail")), provider="docker", controller=lambda: vm)
+
+    assert agent.predict(GOAL, obs(tree=None))[1] == [CLICK_GMAIL], "OSWorld sent no tree, and jev had one"
+    assert agent.predict(GOAL, obs(tree=None))[1] == ["DONE"]
+    finish(agent)
+
+    assert (vm.walks, vm.full_fetches) == (2, 0), "one light walk per observation, and no full fetch"
+    osworld = run_json(tmp_path)["osworld"]
+    assert (osworld["tree"], osworld["tree_fetches"], osworld["tree_fallbacks"]) == ("jev-light", 2, 0)
+    assert set(osworld["tree_seconds"]) == {"mean", "max"}
+    second = json.loads((tmp_path / "jev" / "step-002-answers.json").read_text())
+    assert "ocr_ahead" in second["timing"], "the second capture's OCR was read while its tree came"
+
+
+def test_when_the_light_walk_fails_osworlds_fetch_stands_in_and_the_run_says_so(jev, tmp_path, monkeypatch):
+    monkeypatch.delenv("JEV_OSWORLD_TREE_CHECK", raising=False)
+    vm = VM(broken=True)
+    agent = jev(scripted(("click_item", "Gmail")), controller=lambda: vm)
+
+    assert agent.predict(GOAL, obs(tree=None))[1] == [CLICK_GMAIL]
+    assert agent.predict(GOAL, obs(tree=None))[1] == ["DONE"]
+    finish(agent)
+
+    assert vm.full_fetches == 2
+    osworld = run_json(tmp_path)["osworld"]
+    assert (osworld["tree"], osworld["tree_fallbacks"]) == ("jev-light", 2)
+    assert "No module named 'gi'" in osworld["tree_fallback_reasons"][0]
+
+
+class HungVM(VM):
+    """A VM that stops answering every tree request, until the test ends."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = threading.Event()
+
+    def run_python_script(self, script: str, timeout: float = 90) -> dict:
+        self.walks += 1
+        self.release.wait(STEP_SECONDS)
+        return {"status": "error", "output": "", "error": "too late"}
+
+    def get_accessibility_tree(self) -> str:
+        self.full_fetches += 1
+        self.release.wait(STEP_SECONDS)
+        return self.xml
+
+
+def test_a_vm_that_stops_answering_costs_a_step_its_tree_and_not_the_run(jev, tmp_path, monkeypatch):
+    """chrome/2ad9387a: after a click on Chrome's menu, OSWorld's tree request never came back, and the
+    run hung on it. Each request now has a deadline, and the step goes on with OCR alone."""
+    monkeypatch.delenv("JEV_OSWORLD_TREE_CHECK", raising=False)
+    monkeypatch.setattr(tree, "LIGHT_SECONDS", 0.1)
+    monkeypatch.setattr(tree, "FULL_SECONDS", 0.1)
+    vm = HungVM()
+    try:
+        lines = [("Sign in", 0.99, (800.0, 500.0, 900.0, 530.0))]
+        agent = jev(scripted(("click_item", "Sign in")), lines=lines, controller=lambda: vm)
+        response, actions = agent.predict(GOAL, obs(tree=None))
+        assert actions == ["pyautogui.click(850, 515)"], "OCR alone carried the decision"
+        assert response == "click_item 'Sign in' (0.90)"
+        agent.predict(GOAL, obs(tree=None))
+        finish(agent)
+    finally:
+        vm.release.set()
+    osworld = run_json(tmp_path)["osworld"]
+    assert osworld["tree_missing"] == osworld["tree_fetches"] == osworld["tree_fallbacks"] >= 1
+    first = json.loads((tmp_path / "jev" / "step-001-answers.json").read_text())
+    assert (first["app"], first["url"], first["field"]) == ("", None, None)
+
+
+def test_a_check_run_is_labelled_as_one_and_records_what_it_found(jev, tmp_path, monkeypatch):
+    monkeypatch.setenv("JEV_OSWORLD_TREE_CHECK", "1")
+    vm = VM()
+    agent = jev(scripted(("done", None)), controller=lambda: vm)
+    agent.predict(GOAL, obs(tree=None))
+    finish(agent)
+    osworld = run_json(tmp_path)["osworld"]
+    assert osworld["tree"] == "jev-light-checked", "its steps also fetched OSWorld's tree, so its times are no benchmark"
+    assert osworld["tree_check"]["compared"] == osworld["tree_check"]["matched"] == 1
 
 
 # ----- the step budget and reset --------------------------------------------------------------
@@ -324,7 +488,7 @@ def test_reads_before_input_use_the_obs_in_hand_and_the_first_read_after_input_e
     desktop.press("return")
     assert desktop.screenshot().size == DISPLAY
 
-    assert handed == [[CLICK_GMAIL, "pyautogui.press('enter')"]]
+    assert handed == [[f"{CLICK_GMAIL}\npyautogui.press('enter')"]], "the inputs between two reads are one action"
     assert desktop.browser_url("Google Chrome") == "example.com/next"
     assert len(handed) == 1 and desktop.actions == []
 
@@ -337,7 +501,8 @@ def test_keys_map_onto_pyautogui():
     desktop.press("a", command=True)
     desktop.press("tab")
     desktop.press("delete")
-    assert desktop.actions == [
+    (code,) = desktop.actions
+    assert code.splitlines() == [
         "pyautogui.press('enter')",
         "pyautogui.press('esc')",
         "pyautogui.hotkey('alt', 'left')",
@@ -383,14 +548,14 @@ def test_text_goes_in_only_as_a_string_literal():
     desktop.open_url("Google Chrome", hostile)
 
     allowed = {"pyautogui.write", "pyautogui.press", "pyautogui.hotkey", "subprocess.run", "subprocess.Popen", "time.sleep"}
-    for code in desktop.actions:
-        calls = [node for node in ast.walk(ast.parse(PREFIX + code)) if isinstance(node, ast.Call)]
-        assert {ast.unparse(call.func) for call in calls} <= allowed
-        written = [call.args[0].value for call in calls if ast.unparse(call.func) == "pyautogui.write"]
-        assert written == [hostile]
-    assert in_fake_vm(desktop.actions[0], window=True) == [("write", hostile)]
-    assert ("write", hostile) in in_fake_vm(desktop.actions[1], window=True)
-    assert in_fake_vm(desktop.actions[1], window=False)[-1] == ("Popen", ["google-chrome", hostile], DETACHED)
+    (code,) = desktop.actions
+    calls = [node for node in ast.walk(ast.parse(PREFIX + code)) if isinstance(node, ast.Call)]
+    assert {ast.unparse(call.func) for call in calls} <= allowed
+    written = [call.args[0].value for call in calls if ast.unparse(call.func) == "pyautogui.write"]
+    assert written == [hostile, hostile]
+    assert in_fake_vm(code, window=True)[0] == ("write", hostile)
+    assert in_fake_vm(code, window=True).count(("write", hostile)) == 2
+    assert in_fake_vm(code, window=False)[-1] == ("Popen", ["google-chrome", hostile], DETACHED)
 
 
 def test_open_url_types_into_the_raised_browser_or_starts_it_on_the_url():
@@ -420,20 +585,39 @@ def test_activate_raises_the_browser_or_starts_it_and_no_other_app():
 
 def test_the_other_inputs_and_waits():
     desktop = over(obs())
+    desktop.sleep_watching(3.0)
     desktop.click_at((12.4, 99.6))
     desktop.clear_field()
     desktop.scroll(-10)
     desktop.sleep_watching(0)
-    desktop.sleep_watching(3.0)
+    desktop.sleep_watching(0.5)
+    desktop.press("return")
 
     assert desktop.actions == [
-        "pyautogui.click(12, 100)",
-        CLEAR,
-        "pyautogui.scroll(-10, x=995, y=554)",  # over the active window's center
-        "WAIT",
+        "WAIT",  # with no input before it, an action of its own: OSWorld knows it only that way
+        "\n".join(
+            [
+                "pyautogui.click(12, 100)",  # input after a wait is not folded into it
+                CLEAR,
+                "pyautogui.scroll(-10, x=995, y=554)",  # over the active window's center
+                "time.sleep(0.5)",  # a pause between two inputs is in their code, so they stay one action
+                "pyautogui.press('enter')",
+            ]
+        ),
     ]
-    for code in desktop.actions[:3]:
-        ast.parse(PREFIX + code)
+    ast.parse(PREFIX + desktop.actions[1])
+
+
+def test_input_after_the_browsers_code_runs_whichever_way_it_branched():
+    """The browser's code ends in an `else:` block, so what follows it in the step starts a line of
+    its own rather than joining the block's last line."""
+    desktop = over(obs())
+    desktop.activate("Google Chrome")
+    desktop.press("escape")
+    (code,) = desktop.actions
+    raise_it = ("run", ["wmctrl", "-xa", "google-chrome"], {})
+    assert in_fake_vm(code, window=True) == [raise_it, ("sleep", 0.5), ("press", "esc")]
+    assert in_fake_vm(code, window=False) == [raise_it, ("Popen", ["google-chrome"], DETACHED), ("press", "esc")]
 
 
 def test_with_no_tree_nothing_is_known_but_the_screenshot_and_ocr():
