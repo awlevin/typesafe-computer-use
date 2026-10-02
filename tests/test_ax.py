@@ -1,9 +1,10 @@
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from conftest import busy_page
 
-from typesafe_computer_use import perception
+from typesafe_computer_use import macos, perception
 from typesafe_computer_use.ax_walk import AxAttrs, walk_actionable
 from typesafe_computer_use.models import AxNode, Item
 from typesafe_computer_use.platform_adapter import desktop
@@ -346,3 +347,81 @@ def test_an_app_that_lists_itself_as_a_child_terminates():
     found, _, cap_hit = walk_actionable("app", lambda n: tree[n], attrs, lambda n: ["AXPress"], 1000, 800)
     assert [n.label for n in found] == ["File"]
     assert not cap_hit
+
+
+def test_macos_walk_focuses_front_window_but_keeps_the_menu_bar(monkeypatch):
+    front = node("AXWindow", "Front", children=[node("AXButton", "Front control", press=True)])
+    background = [
+        node(
+            "AXWindow",
+            f"Background {i}",
+            children=[node("AXButton", f"Back {i}-{j}", frame=(10.0 + j, 40.0 + i * 300, 100.0, 20.0)) for j in range(125)],
+        )
+        for i in range(2)
+    ]
+    bar = node("AXMenuBar", children=[node("AXMenuBarItem", "File", frame=(50.0, 0.0, 34.0, 24.0))])
+    root = app(*background, front, bar)
+    monkeypatch.setattr(
+        macos,
+        "AS",
+        SimpleNamespace(
+            AXUIElementCreateApplication=lambda pid: root,
+            AXUIElementSetMessagingTimeout=lambda root, timeout: None,
+            kAXFocusedWindowAttribute="focused",
+            kAXMenuBarAttribute="menu",
+        ),
+    )
+    monkeypatch.setattr(macos, "_ax_attr", lambda element, name: {"focused": front, "menu": bar}[name])
+    monkeypatch.setattr(macos, "_ax_children", lambda element: element["children"])
+    monkeypatch.setattr(macos, "_ax_attrs", lambda element: AxAttrs(element["role"], element["label"], element["frame"]))
+    monkeypatch.setattr(macos, "_ax_actions", lambda element: ["AXPress"] if element["press"] else [])
+    _, _, full_cap = walk(root, node_cap=250)
+    assert full_cap
+    real_walk = walk_actionable
+    monkeypatch.setattr(macos, "walk_actionable", lambda *args: real_walk(*args, node_cap=250))
+    found, _, capped = macos.actionable_elements(42, *DISPLAY)
+    assert [element.label for element in found] == ["Front control", "File"]
+    assert not capped
+
+
+def test_macos_focused_window_without_menu_bar_still_keeps_its_controls(monkeypatch):
+    front = node("AXWindow", "Front", children=[node("AXButton", "Save")])
+    root = app(front)
+    monkeypatch.setattr(
+        macos,
+        "AS",
+        SimpleNamespace(
+            AXUIElementCreateApplication=lambda pid: root,
+            AXUIElementSetMessagingTimeout=lambda root, timeout: None,
+            kAXFocusedWindowAttribute="focused",
+            kAXMenuBarAttribute="menu",
+        ),
+    )
+    monkeypatch.setattr(macos, "_ax_attr", lambda element, name: front if name == "focused" else None)
+    monkeypatch.setattr(macos, "_ax_children", lambda element: element["children"])
+    monkeypatch.setattr(macos, "_ax_attrs", lambda element: AxAttrs(element["role"], element["label"], element["frame"]))
+    monkeypatch.setattr(macos, "_ax_actions", lambda element: [])
+    found, _, capped = macos.actionable_elements(42, *DISPLAY)
+    assert [element.label for element in found] == ["Save"]
+    assert not capped
+
+
+def test_macos_walk_falls_back_to_app_if_no_focused_window(monkeypatch):
+    root = app(node("AXWindow", "Only", children=[node("AXButton", "Open")]))
+    monkeypatch.setattr(
+        macos,
+        "AS",
+        SimpleNamespace(
+            AXUIElementCreateApplication=lambda pid: root,
+            AXUIElementSetMessagingTimeout=lambda root, timeout: None,
+            kAXFocusedWindowAttribute="focused",
+            kAXMenuBarAttribute="menu",
+        ),
+    )
+    monkeypatch.setattr(macos, "_ax_attr", lambda element, name: None)
+    monkeypatch.setattr(macos, "_ax_children", lambda element: element["children"])
+    monkeypatch.setattr(macos, "_ax_attrs", lambda element: AxAttrs(element["role"], element["label"], element["frame"]))
+    monkeypatch.setattr(macos, "_ax_actions", lambda element: [])
+    found, _, capped = macos.actionable_elements(42, *DISPLAY)
+    assert [element.label for element in found] == ["Open"]
+    assert not capped
