@@ -127,16 +127,32 @@ def osascript(script: str) -> str:
     return subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=True).stdout.strip()
 
 
+def _frontmost_display_name(process_name: str) -> str:
+    """Safari web apps all run as Web App; use their displayed names to tell them apart."""
+    if process_name != "Web App":
+        return process_name
+    try:
+        return (
+            osascript(
+                'tell application "System Events" to get displayed name of first application process whose frontmost is true'
+            )
+            or process_name
+        )
+    except subprocess.CalledProcessError:
+        return process_name
+
+
 def frontmost_app() -> str:
-    return osascript('tell application "System Events" to get name of first application process whose frontmost is true')
+    name = osascript('tell application "System Events" to get name of first application process whose frontmost is true')
+    return _frontmost_display_name(name)
 
 
 def frontmost_app_and_pid() -> tuple[str, int]:
-    """Name and pid of the frontmost process in one AppleScript round trip."""
+    """Frontmost process name and pid; only Safari web apps need a displayed-name lookup."""
     name, _, pid = osascript(
         'tell application "System Events" to tell (first application process whose frontmost is true) to get {name, unix id}'
     ).rpartition(", ")
-    return name, int(pid)
+    return _frontmost_display_name(name), int(pid)
 
 
 def frontmost_pid() -> int:
