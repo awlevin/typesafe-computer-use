@@ -1,4 +1,4 @@
-"""Command-line entry points: `clicker` and `clicker-inspect`."""
+"""Command-line entry points: `clicker`, `clicker-inspect`, and `clicker-listen`."""
 
 from __future__ import annotations
 
@@ -140,3 +140,11 @@ def inspect(argv: list[str] | None = None) -> None:
     if not args.no_open:
         desktop.open_path(annotated)
         desktop.open_path(text, as_text=True)
+
+
+def listen(argv: list[str] | None = None) -> None:
+    """Always-on voice front door (macOS). argv accepted for symmetry with the other entry points."""
+    del argv
+    from .listen import listen as run_listener
+
+    run_listener()

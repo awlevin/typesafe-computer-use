@@ -28,7 +28,9 @@ dependencies = [
     "websocket-client==1.9.0",
     "ocrmac==1.0.1; sys_platform == 'darwin'",
     "pyobjc-framework-ApplicationServices==12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-AVFoundation==12.2.2; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz==12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-Speech==12.2.2; sys_platform == 'darwin'",
     "psutil==7.2.2; sys_platform == 'win32'",
     "pywin32==312; sys_platform == 'win32'",
     "uiautomation==2.0.29; sys_platform == 'win32'",
@@ -47,6 +49,7 @@ Issues = "https://github.com/awlevin/typesafe-computer-use/issues"
 [project.scripts]
 clicker = "typesafe_computer_use.cli:main"
 clicker-inspect = "typesafe_computer_use.cli:inspect"
+clicker-listen = "typesafe_computer_use.cli:listen"
 clicker-bench = "typesafe_computer_use.browser.bench:main"
 
 [dependency-groups]
