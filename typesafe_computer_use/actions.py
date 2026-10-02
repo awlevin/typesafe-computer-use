@@ -109,7 +109,10 @@ def fill_field(field: Field, text: str) -> str:
     page that moves the focus mid-word. It is also widely ignored, so the value is read back and
     only a field that really holds the text counts. Keystrokes land after whatever the field
     holds, including a value the element took but did not read back, so the field is always
-    emptied first. Returns which path ran, for the history.
+    emptied first - but only in the field the step captured. The decision round trip and the
+    settle delay sit between the capture and this call, long enough for a page to move the focus,
+    so the live focus is checked right before the keystroke path and the whole thing is refused,
+    untouched, when it is not that same field. Returns which path ran, for the history.
     """
     ref = field.ref
     if ref is not None:
@@ -118,6 +121,8 @@ def fill_field(field: Field, text: str) -> str:
             back = desktop.ax_value(ref)
             if back is not None and back.endswith(text):
                 return "via accessibility"
+    if not field.same_element(desktop.focused_field()):
+        return "refused: focus moved to a different field since the step was captured"
     desktop.clear_field()
     desktop.type_text(text)
     return "via keystrokes"
@@ -166,6 +171,8 @@ def _type_email(decision, screen: Screen, items, ctx: Context) -> str:
     if not (screen.field and screen.field.is_text):
         return "type_email refused: no text field is focused"
     how = fill_field(screen.field, ctx.email or "")
+    if how.startswith("refused"):
+        return f"type_email {how}"
     return f"typed email {how}"
 
 
@@ -188,6 +195,8 @@ def _type_text(decision, screen: Screen, items, ctx: Context) -> str:
     if not text:
         return "type_text refused: writer declined to fill this field"
     how = fill_field(screen.field, text)
+    if how.startswith("refused"):
+        return f"type_text {how}"
     if fill.submit:
         desktop.press("return")
         return f"typed {text!r} into {screen.field.label!r} {how} and pressed Return"

@@ -215,6 +215,23 @@ class Field:
     def is_text(self) -> bool:
         return self.role in TEXT_ROLES
 
+    def same_element(self, other: Field | None) -> bool:
+        """Same on-screen field as this one, not just a field that looks alike.
+
+        Role, label, placeholder, and position together tell two fields on the same screen
+        apart. `value` is left out on purpose: it is the very thing typing into this field is
+        about to change, so comparing it would call a successful type a focus change.
+        """
+        return other is not None and (self.role, self.label, self.placeholder, self.x, self.y, self.w, self.h) == (
+            other.role,
+            other.label,
+            other.placeholder,
+            other.x,
+            other.y,
+            other.w,
+            other.h,
+        )
+
     def record(self) -> dict:
         """Everything but the opaque element handle, which no log can serialize."""
         return {f.name: getattr(self, f.name) for f in fields(self) if f.name != "ref"}

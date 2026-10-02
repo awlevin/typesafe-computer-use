@@ -19,6 +19,8 @@ def calls(monkeypatch):
     monkeypatch.setattr(desktop, "type_text", lambda text: log.append(("type", text)))
     monkeypatch.setattr(desktop, "ax_focus", lambda ref: log.append(("focus", ref)) or True)
     monkeypatch.setattr(desktop, "clear_field", lambda: log.append(("clear",)))
+    # The field the step captured is still the one focused, unless a test says otherwise.
+    monkeypatch.setattr(desktop, "focused_field", lambda: field())
     return log
 
 
@@ -273,6 +275,33 @@ def test_typing_uses_keystrokes_when_there_is_no_element(calls, monkeypatch):
     assert calls == [("clear",), ("type", "hello")]
 
 
+def test_keystroke_fallback_refuses_when_focus_moved_to_another_field(calls, monkeypatch):
+    """The decision round trip and the settle delay sit between the capture and this call, long
+    enough for a page to move the focus. The fallback must not empty whatever it lands on."""
+    monkeypatch.setattr(desktop, "ax_set_value", lambda ref, text: False)
+    elsewhere = replace(field(), label="Search box", x=600, y=700)
+    monkeypatch.setattr(desktop, "focused_field", lambda: elsewhere)
+    assert fill_field(field(ref=object()), "hello") == "refused: focus moved to a different field since the step was captured"
+    assert ("clear",) not in calls and not any(kind == "type" for kind, *_ in calls)
+
+
+def test_keystroke_fallback_refuses_when_nothing_is_focused_any_more(calls, monkeypatch):
+    monkeypatch.setattr(desktop, "ax_set_value", lambda ref, text: pytest.fail("no element to write to"))
+    monkeypatch.setattr(desktop, "focused_field", lambda: None)
+    assert fill_field(field(), "hello") == "refused: focus moved to a different field since the step was captured"
+    assert calls == []
+
+
+def test_keystroke_fallback_proceeds_when_the_same_field_is_still_focused(calls, monkeypatch):
+    """Only identity matters, not the value: a field read back as holding part of the text, from
+    the AX attempt a moment earlier, is still the same field."""
+    monkeypatch.setattr(desktop, "ax_set_value", lambda ref, text: True)
+    monkeypatch.setattr(desktop, "ax_value", lambda ref: "hel")  # the element took part of it
+    monkeypatch.setattr(desktop, "focused_field", lambda: field(value="hel"))
+    assert fill_field(field(ref=object()), "hello") == "via keystrokes"
+    assert calls[-2:] == [("clear",), ("type", "hello")]
+
+
 def test_the_field_record_leaves_the_element_out_so_a_run_can_be_written():
     record = field(ref=object(), value="hello").record()
     assert "ref" not in record and json.loads(json.dumps(record))["value"] == "hello"
@@ -326,7 +355,10 @@ def test_text_the_writer_submits_is_followed_by_return_and_left_to_the_next_scre
     monkeypatch.setattr(desktop, "press", lambda key, command=False: calls.append(("press", key)))
     monkeypatch.setattr(actions, "compose_text", lambda *a: Fill("Favorites", submit=True))
     monkeypatch.setattr(actions.time, "sleep", lambda *a: pytest.fail("there is no read to wait for"))
-    monkeypatch.setattr(desktop, "focused_field", lambda: pytest.fail("the field is gone after Return"))
+    # Read once, before the keystrokes, to confirm the focus did not already move; never again
+    # after Return, which the fixture default would fail on the second call.
+    reads = []
+    monkeypatch.setattr(desktop, "focused_field", lambda: reads.append(1) or field())
     monkeypatch.setattr(actions, "verify_typed", lambda *a: pytest.fail("nothing to check the text against"))
     monkeypatch.setattr(actions, "restore_field", lambda *a: pytest.fail("nothing to restore"))
 
@@ -334,6 +366,26 @@ def test_text_the_writer_submits_is_followed_by_return_and_left_to_the_next_scre
 
     assert result == "typed 'Favorites' into 'Email' via keystrokes and pressed Return"
     assert calls == [("clear",), ("type", "Favorites"), ("press", "return")]
+    assert reads == [1]
+
+
+def test_type_text_surfaces_a_refused_fill_without_pressing_return_or_verifying(screen, monkeypatch):
+    monkeypatch.setattr(actions, "compose_text", lambda *a: Fill("Favorites", submit=True))
+    monkeypatch.setattr(actions, "fill_field", lambda *a: "refused: focus moved to a different field since the step was captured")
+    monkeypatch.setattr(desktop, "press", lambda *a, **k: pytest.fail("nothing was typed to submit"))
+    monkeypatch.setattr(actions, "verify_typed", lambda *a: pytest.fail("nothing was typed to verify"))
+
+    result = actions._type_text(None, replace(screen, field=field()), [], context(object()))
+
+    assert result == "type_text refused: focus moved to a different field since the step was captured"
+
+
+def test_type_email_surfaces_a_refused_fill(screen, monkeypatch):
+    monkeypatch.setattr(actions, "fill_field", lambda *a: "refused: focus moved to a different field since the step was captured")
+
+    result = actions._type_email(None, replace(screen, field=field()), [], context())
+
+    assert result == "type_email refused: focus moved to a different field since the step was captured"
 
 
 @pytest.mark.parametrize("current", [None, "user edited the value", "prefix new query"])
