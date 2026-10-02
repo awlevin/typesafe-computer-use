@@ -465,7 +465,7 @@ def compose_browser_answer(
             "question": {"type": "string"},
         },
         max_tokens=1024,
-        model=answer_model(),
+        answering=True,
         image=image if writer_vision() else None,
     )
     return Answer(
