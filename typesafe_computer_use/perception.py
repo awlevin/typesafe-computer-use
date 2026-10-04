@@ -42,7 +42,7 @@ def capture(
     timing: dict[str, float] | None = None,
     ahead: OcrCache | None = None,
 ) -> Screen:
-    """Capture the main display, or load a saved capture for replay (then app/url are taken as given).
+    """Capture the display the frontmost window is on, or load a saved capture for replay (then app/url are taken as given).
 
     Each query below is a round trip to the window server, AX, or AppleScript. Pass `timing` to
     record the seconds each one costs under "screenshot", "app", "window", "field", and "url".
