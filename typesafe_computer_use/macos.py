@@ -25,6 +25,14 @@ from .models import Abort, AxNode, Field
 
 KEYCODES = {"return": 36, "tab": 48, "escape": 53, "a": 0, "delete": 51, "[": 33}
 MIN_WINDOW_SIDE_PT = 50.0  # anything smaller is a palette or a shadow, not the window being worked in
+MAX_DISPLAYS = 16
+SHAPE_TOLERANCE = 0.02  # how far a capture's aspect ratio may stray from its display's and still be that display
+
+# The display the last capture came from, when it is not the main one: screencapture's -D number and
+# the display's bounds in global points. Everything read for that capture (the window, the focused
+# field, the accessibility frames) is in that display's points, with its top-left corner at 0, 0, as
+# a capture of the main display always was; a click adds the corner back. None is the main display.
+_display: tuple[int, Frame] | None = None
 
 # ------------------------------------------------------------------ escape hatch
 
@@ -72,6 +80,8 @@ def _down_then_up(event: Callable[[bool], object]) -> None:
 
 
 def click_at(point: tuple[float, float]) -> None:
+    ox, oy = _origin()
+    point = (point[0] + ox, point[1] + oy)
     # Check before moving: the synthetic move would otherwise take the pointer out of the abort corner.
     check_abort()
     _post(Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, point, Quartz.kCGMouseButtonLeft))
@@ -177,24 +187,34 @@ def open_path(path: Path, as_text: bool = False) -> None:
     subprocess.run(["open", *(["-t"] if as_text else []), str(path)], check=False)
 
 
-def frontmost_window_bounds(pid: int | None = None) -> tuple[float, float, float, float] | None:
-    """The frontmost app's topmost on-screen window as x, y, w, h in points. Pure Quartz, no AX needed.
-
-    Pass the pid when the caller already has it; looking it up costs an AppleScript round trip.
-    """
-    pid = frontmost_pid() if pid is None else pid
+def _topmost_window(pid: int | None) -> Frame | None:
+    """The topmost on-screen app window, of `pid` or of any process, in global points."""
     options = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
     for window in Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID) or []:
-        if window.get("kCGWindowOwnerPID") == pid and window.get("kCGWindowLayer") == 0:
+        if (pid is None or window.get("kCGWindowOwnerPID") == pid) and window.get("kCGWindowLayer") == 0:
             b = window["kCGWindowBounds"]
             if b["Width"] > MIN_WINDOW_SIDE_PT and b["Height"] > MIN_WINDOW_SIDE_PT:
                 return float(b["X"]), float(b["Y"]), float(b["Width"]), float(b["Height"])
     return None
 
 
+def frontmost_window_bounds(pid: int | None = None) -> tuple[float, float, float, float] | None:
+    """The frontmost app's topmost on-screen window as x, y, w, h in the captured display's points.
+    Pure Quartz, no AX needed.
+
+    Pass the pid when the caller already has it; looking it up costs an AppleScript round trip.
+    """
+    bounds = _topmost_window(frontmost_pid() if pid is None else pid)
+    if bounds is None:
+        return None
+    ox, oy = _origin()
+    x, y, w, h = bounds
+    return x - ox, y - oy, w, h
+
+
 def frontmost_window_center(pid: int | None = None) -> tuple[float, float] | None:
-    """Center of the frontmost app's topmost on-screen window, in points."""
-    bounds = frontmost_window_bounds(pid)
+    """Center of the frontmost app's topmost on-screen window, in global points (where the pointer goes)."""
+    bounds = _topmost_window(frontmost_pid() if pid is None else pid)
     if bounds is None:
         return None
     x, y, w, h = bounds
@@ -204,14 +224,63 @@ def frontmost_window_center(pid: int | None = None) -> tuple[float, float] | Non
 # ------------------------------------------------------------------ capture and accessibility
 
 
-def screenshot() -> Image.Image:
+def _frame(rect) -> Frame:
+    return float(rect.origin.x), float(rect.origin.y), float(rect.size.width), float(rect.size.height)
+
+
+def _origin() -> tuple[float, float]:
+    """The captured display's top-left corner in global points."""
+    return (0.0, 0.0) if _display is None else (_display[1][0], _display[1][1])
+
+
+def displays() -> list[Frame]:
+    """Every active display's bounds in global points, main display first: screencapture's -D order."""
+    err, ids, count = Quartz.CGGetActiveDisplayList(MAX_DISPLAYS, None, None)
+    if err or not ids:
+        return [_frame(Quartz.CGDisplayBounds(Quartz.CGMainDisplayID()))]
+    return [_frame(Quartz.CGDisplayBounds(display)) for display in list(ids)[:count]]
+
+
+def frontmost_display() -> tuple[int, Frame] | None:
+    """screencapture's -D number and the bounds of the display under the frontmost window's center,
+    or None for the main display (also when there is no window, or it sits on no display)."""
+    window = _topmost_window(None)
+    if window is None:
+        return None
+    cx, cy = window[0] + window[2] / 2, window[1] + window[3] / 2
+    for number, (x, y, w, h) in enumerate(displays(), start=1):
+        if x <= cx < x + w and y <= cy < y + h:
+            return None if number == 1 else (number, (x, y, w, h))
+    return None
+
+
+def _capture(number: int) -> Image.Image:
     path = Path(tempfile.mkdtemp()) / "screen.png"
-    subprocess.run(["screencapture", "-x", "-D", "1", str(path)], check=True, capture_output=True)
+    subprocess.run(["screencapture", "-x", "-D", str(number), str(path)], check=True, capture_output=True)
     return Image.open(path).convert("RGB")
 
 
+def screenshot() -> Image.Image:
+    """The display the frontmost window is on: the main display, unless that window is on another.
+
+    Every later read for this capture is in that display's points (see `_display`). A capture whose
+    shape is not that display's means screencapture numbered the displays differently from Quartz,
+    and the main display is captured instead.
+    """
+    global _display
+    _display = None
+    chosen = frontmost_display()
+    if chosen is not None:
+        image = _capture(chosen[0])
+        _, _, w, h = chosen[1]
+        if abs(image.width / image.height - w / h) <= SHAPE_TOLERANCE * (w / h):
+            _display = chosen
+            return image
+    return _capture(1)
+
+
 def display_scale(image: Image.Image) -> float:
-    points_wide = Quartz.CGDisplayBounds(Quartz.CGMainDisplayID()).size.width
+    points_wide = _display[1][2] if _display is not None else Quartz.CGDisplayBounds(Quartz.CGMainDisplayID()).size.width
     return image.width / points_wide
 
 
@@ -240,7 +309,8 @@ def focused_field() -> Field | None:
     if pos is not None and size is not None:
         _, pt = AS.AXValueGetValue(pos, AS.kAXValueCGPointType, None)
         _, sz = AS.AXValueGetValue(size, AS.kAXValueCGSizeType, None)
-        x, y, w, h = pt.x, pt.y, sz.width, sz.height
+        ox, oy = _origin()
+        x, y, w, h = pt.x - ox, pt.y - oy, sz.width, sz.height
     value = _ax_attr(element, AS.kAXValueAttribute)
     label = _ax_attr(element, AS.kAXTitleAttribute) or _ax_attr(element, AS.kAXDescriptionAttribute) or ""
     return Field(
@@ -347,4 +417,13 @@ def actionable_elements(pid: int, display_w_pt: float, display_h_pt: float) -> t
     and whether a cap cut the walk short."""
     app = AS.AXUIElementCreateApplication(pid)
     AS.AXUIElementSetMessagingTimeout(app, AX_MESSAGE_TIMEOUT)
-    return walk_actionable(app, _ax_children, _ax_attrs, _ax_actions, display_w_pt, display_h_pt)
+    ox, oy = _origin()
+
+    def attrs(element) -> AxAttrs:
+        found = _ax_attrs(element)
+        if found.frame is None or (ox, oy) == (0.0, 0.0):
+            return found
+        x, y, w, h = found.frame
+        return found._replace(frame=(x - ox, y - oy, w, h))
+
+    return walk_actionable(app, _ax_children, attrs, _ax_actions, display_w_pt, display_h_pt)

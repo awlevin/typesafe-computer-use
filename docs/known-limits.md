@@ -4,7 +4,9 @@
   In a terminal, a canvas, or Spotify, an icon-only button reaches neither source.
 - Two identical labels in one row, or in no row at all, get only a coarse region hint and
   split the vote. Ones in different rows are told apart by the text beside them.
-- Only the main display is captured.
+- Only one display is captured per step: on macOS, the one under the frontmost window's
+  center (a window straddling two displays is read only on that one); on Windows, the primary
+  monitor.
 - A repeated action whose effect never shows on screen (a third "New note" in an app that
   lists nothing) reads as a cycle and stops the run: the capture is the only witness.
 - Using the machine during an `--act` run fights it for focus and the cursor.
