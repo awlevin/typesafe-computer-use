@@ -232,6 +232,21 @@ def test_the_page_script_never_reads_what_was_typed():
     assert "value:" not in INTERACTIVE_JS
 
 
+def test_the_page_script_stamps_each_element_once_and_never_finds_one_by_its_number():
+    """An element's number is its place in reading order, and reading order is not document
+    order: a sidebar's links come first in the document and are read row by row with the main
+    column. Numbering in document order and then renumbering by finding each element by its
+    old number finds whichever element holds that number by then, so the number reported for
+    one control ends up on another, and a click or typed text follows it. The script keeps
+    the elements and stamps each one once, after the sort. These tests run no browser, so
+    this reads the script itself."""
+    js = INTERACTIVE_JS
+    assert js.count('setAttribute("data-tscu"') == 1
+    assert js.index("out.sort(") < js.index('setAttribute("data-tscu"')
+    # The only query on the stamp is the one that clears the last read's stamps.
+    assert re.findall(r"querySelector(?:All)?\([^)]*data-tscu[^)]*\)", js) == ['querySelectorAll("[data-tscu]")']
+
+
 def test_a_credential_field_is_marked_in_what_the_classifier_reads():
     page = perceive(FakeBrowser(login_page()))
     assert "credential field" in element_criteria(page)["1"]
