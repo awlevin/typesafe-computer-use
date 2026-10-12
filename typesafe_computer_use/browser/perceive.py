@@ -49,6 +49,7 @@ INTERACTIVE_JS = r"""
   const SECRET_AUTOCOMPLETE = /(^|\s)(current-password|new-password|one-time-code|cc-number|cc-csc|cc-exp|cc-exp-month|cc-exp-year)(\s|$)/;
   const vw = window.innerWidth, vh = window.innerHeight;
   const out = [];
+  const els = [];  // the element behind each entry of `out`, by sid
   const seen = new Set();
   let sid = 0, belowFold = 0, total = 0;
   for (const el of document.querySelectorAll(SEL)) {
@@ -85,7 +86,7 @@ INTERACTIVE_JS = r"""
     const y = Math.round(r.top + r.height / 2);
     const top = document.elementFromPoint(Math.max(0, Math.min(x, vw - 1)), Math.max(0, Math.min(y, vh - 1)));
     const covered = !!(top && !el.contains(top) && !top.contains(el));
-    el.setAttribute("data-tscu", String(sid));
+    els.push(el);
     out.push({sid, tag: el.tagName.toLowerCase(), role: role || type,
               name, x, y, w: Math.round(r.width), h: Math.round(r.height),
               in_view: true, covered,
@@ -94,9 +95,11 @@ INTERACTIVE_JS = r"""
     sid++;
   }
   out.sort((a, b) => (Math.abs(a.y - b.y) > 8 ? a.y - b.y : a.x - b.x));
+  // Stamped once, after the sort, from the element itself. Finding it again by its old
+  // number would find whichever element holds that number by then: an element already
+  // renumbered, and earlier in the document, can hold it too.
   out.forEach((o, i) => {
-    const el = document.querySelector('[data-tscu="' + o.sid + '"]');
-    if (el) el.setAttribute("data-tscu", String(i));
+    els[o.sid].setAttribute("data-tscu", String(i));
     o.index = i;
   });
   // --- visible text: prices, dates, errors, everything that is not a control --------
