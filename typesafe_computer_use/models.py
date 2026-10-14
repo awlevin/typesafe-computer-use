@@ -86,6 +86,7 @@ ROW_PT = 20.0  # the row a line sits in, in screen points: coarse enough to surv
 # "Settings - Memory usage - 56.0 MB", or "High memory usage". The figure drifts between two
 # captures of one screen, and with the clock it makes two changed lines, so it is left out.
 TAB_MEMORY = re.compile(r" - (?:high )?memory usage - [\d.,]+ ?[kmgt]?b$", re.IGNORECASE)
+SPINNER_DOTS = ".…"
 
 
 def signature(screen: Screen, items: list[Item]) -> Signature:
@@ -108,13 +109,31 @@ def same_screen(a: Signature, b: Signature) -> bool:
     One line may differ, and only when it is one in ten or less. On a dense page a two-line modal
     is a change; on a five-line page any change is one. Measured as lines that appeared or
     vanished, whichever is more, so a page that gained a section counts as changed and one that
-    lost a line under the bar counts as the same.
+    lost a line under the bar counts as the same. A line changed in place is a change too, unless
+    it changed the way noise does: a calculator display that gains a digit is real, but a clock or
+    a ticker is not, however many other lines sit around it.
     """
     if a[:3] != b[:3]:
         return False
     lines_a, lines_b = set(a[3]), set(b[3])
-    differing = max(len(lines_a - lines_b), len(lines_b - lines_a))
+    gone, came = lines_a - lines_b, lines_b - lines_a
+    if len(gone) == len(came) == 1:
+        [(old, _)], [(new, _)] = gone, came
+        if not looks_like_noise(old, new):
+            return False
+    differing = max(len(gone), len(came))
     return differing <= MAX_DIFFERING_LINES and differing * LINES_PER_DIFFERENCE <= max(len(lines_a), len(lines_b))
+
+
+def looks_like_noise(old: str, new: str) -> bool:
+    """A clock or a ticker (digits swapped, same length), an OCR slip (one character), or spinner
+    dots: the kinds of single-line change that same_screen should still treat as no change."""
+    if old.rstrip(SPINNER_DOTS) == new.rstrip(SPINNER_DOTS):
+        return True
+    if len(old) != len(new):
+        return False
+    changed = [(x, y) for x, y in zip(old, new, strict=True) if x != y]
+    return len(changed) <= 1 or all(x.isdigit() and y.isdigit() for x, y in changed)
 
 
 @dataclass(frozen=True)

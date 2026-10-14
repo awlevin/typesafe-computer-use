@@ -73,6 +73,15 @@ def test_one_line_changing_on_a_short_page_is_a_new_screen():
     )
 
 
+def test_a_display_line_changing_is_a_new_screen_even_on_a_longer_page():
+    """A calculator-style display that gains a digit is not a clock or an OCR slip: the ratio rule
+    alone let it hide behind nine unrelated lines, so one digit press never read as a change."""
+    keys = [f"Key {n}" for n in range(9)]
+    before = ("Calculator", None, None, texts(*keys, "0"))
+    after = ("Calculator", None, None, texts(*keys, "29"))
+    assert not same_screen(before, after)
+
+
 def test_a_page_that_gained_a_section_is_a_new_screen():
     before = ("Google Chrome", None, None, texts("Home", "Tickets"))
     after = ("Google Chrome", None, None, texts("Home", "Tickets", "Buy", "Terms", "Dates"))
