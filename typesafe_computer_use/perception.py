@@ -28,6 +28,7 @@ REGION_MARGIN_PT = 8.0  # slack around the window, for the shadow and a clipped 
 THUMB_DIVISOR = 8  # the change detector works on a 1/8 scale grayscale copy
 TILE_PX = 256.0  # tile side in capture pixels
 TILE_DIFF = 6.0  # mean absolute 8-bit difference that counts a tile as changed
+TILE_PEAK_DIFF = 32.0  # or one thumbnail pixel moving this much, when a small patch cannot move the mean
 REOCR_FRACTION = 0.6  # above this share of changed tiles, reading the whole region is cheaper
 MAX_REOCR_RECTS = 4  # past this, the per-call overhead outweighs the pixels another rectangle saves
 BLANK_INSET_PX = 4  # how far in from a control's edge its inside is read, past a neighbour's border
@@ -354,13 +355,19 @@ def tile_changed(
     tile: Box,
     divisor: int = THUMB_DIVISOR,
     threshold: float = TILE_DIFF,
+    peak: float = TILE_PEAK_DIFF,
 ) -> bool:
-    """True when the tile's mean absolute pixel difference clears the threshold. A tile whose patch
-    cannot be compared counts as changed, so a doubt is always paid for with a re-read."""
+    """True when the tile's mean absolute pixel difference clears the threshold, or one thumbnail
+    pixel moved past `peak`. A new digit on a display is a handful of pixels out of a 256 px tile:
+    averaged over the whole tile its mean stays under `threshold`, but the pixels it did move are far
+    brighter or darker than the noise `threshold` is tuned for, so a single sharp pixel still counts.
+    A tile whose patch cannot be compared counts as changed, so a doubt is always paid for with a
+    re-read."""
     a, b = _patch(thumb, tile, divisor), _patch(previous, tile, divisor)
     if a.size != b.size or not a.width or not a.height:
         return True
-    return ImageStat.Stat(ImageChops.difference(a, b)).mean[0] > threshold
+    diff = ImageChops.difference(a, b)
+    return ImageStat.Stat(diff).mean[0] > threshold or diff.getextrema()[1] > peak
 
 
 def _patch(thumb: Image.Image, tile: Box, divisor: int) -> Image.Image:
@@ -374,8 +381,9 @@ def changed_tiles(
     tiles: list[Box],
     divisor: int = THUMB_DIVISOR,
     threshold: float = TILE_DIFF,
+    peak: float = TILE_PEAK_DIFF,
 ) -> list[Box]:
-    return [tile for tile in tiles if tile_changed(thumb, previous, tile, divisor, threshold)]
+    return [tile for tile in tiles if tile_changed(thumb, previous, tile, divisor, threshold, peak)]
 
 
 def tile_clusters(changed: list[Box], tile: float = TILE_PX) -> list[list[Box]]:

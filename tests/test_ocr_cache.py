@@ -115,6 +115,16 @@ def test_faint_noise_does_not_count_as_a_change():
     assert changed_tiles(thumbnail(after), thumbnail(before), tiles) == []
 
 
+def test_a_small_bright_change_is_not_lost_in_the_tile_average():
+    """A new digit on a display is a tiny patch of a 256 px tile. Averaged over the whole tile its
+    mean difference stays under TILE_DIFF, but the patch itself is far brighter than its neighbours,
+    so a tile this small should still be flagged changed."""
+    before = painted((1024, 512))
+    after = painted((1024, 512), boxes=[(300, 300, 312, 312)])
+    tiles = tiles_in((0.0, 0.0, 1024.0, 512.0))
+    assert changed_tiles(thumbnail(after), thumbnail(before), tiles) == [(256.0, 256.0, 512.0, 512.0)]
+
+
 def test_a_rect_pads_by_one_tile_and_clamps_to_the_region():
     region = (0.0, 0.0, 1024.0, 512.0)
     assert reocr_rects([(256.0, 256.0, 512.0, 512.0)], region, []) == [(0.0, 0.0, 768.0, 512.0)]
