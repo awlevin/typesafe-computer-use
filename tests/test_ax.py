@@ -158,6 +158,19 @@ def test_skips_closed_menu_subtrees_but_keeps_the_menu_bar_item():
     assert labels(app(bar_item))[0] == ["File"]
 
 
+def test_walks_into_an_open_menu_whose_frame_is_real_and_on_the_display():
+    """An open menu reports a real frame on the display, not the zero-size one a closed menu reports,
+    so its items are not skipped the way a closed menu's are."""
+    menu = node(
+        "AXMenu",
+        "",
+        frame=(50.0, 24.0, 160.0, 280.0),
+        children=[node("AXMenuItem", "New Folder", frame=(50.0, 24.0, 160.0, 20.0), press=True)],
+    )
+    bar_item = node("AXMenuBarItem", "File", frame=(50.0, 0.0, 34.0, 24.0), children=[menu])
+    assert labels(app(bar_item))[0] == ["File", "New Folder"]
+
+
 def test_decorative_child_does_not_repeat_its_parents_label():
     button = node("AXButton", "Add reaction", children=[node("AXImage", "", frame=(20.0, 12.0, 16.0, 16.0))])
     assert labels(app(button))[0] == ["Add reaction"]

@@ -172,7 +172,10 @@ def walk_actionable(
         visited.add(identity)
         seen += 1
         role, own_label, frame = attrs(node)
-        if role in AX_SKIP_SUBTREE_ROLES:
+        # A closed menu reports a zero-size frame and is worth skipping outright: thousands of
+        # items, none on screen. An open one has a real frame on the display, so it is walked
+        # like any other subtree instead.
+        if role in AX_SKIP_SUBTREE_ROLES and not (clickable(frame) and not off_display(frame, display_w_pt, display_h_pt)):
             continue
         key = subtree_key(role, own_label, frame)
         # A node keyed like its own parent wraps it, as AT-SPI nests nameless panels of one frame:
