@@ -55,7 +55,31 @@ def test_click_releases_the_button_when_interrupted_after_mouse_down(input_event
     assert [event[0] for event in input_events] == ["move", "down", "up"]
 
 
-def test_a_key_goes_back_up_when_interrupted_after_key_down(input_events, monkeypatch):
+def test_a_plain_key_goes_back_up_when_interrupted_after_key_down(input_events, monkeypatch):
+    def post(event):
+        input_events.append(dict(event))
+        if event["down"]:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(macos, "_post", post)
+    with pytest.raises(KeyboardInterrupt):
+        macos.press("a")
+    assert input_events == [{"down": True}, {"down": False}]
+
+
+def test_a_command_shortcut_sends_the_command_key_down_before_and_up_after_the_key(input_events):
+    """Command's own key carries no flag of its own, so without a key-down for it the system keeps
+    Command held after the press and every later key and click arrives as a Command one too."""
+    macos.press("a", command=True)
+    assert [(event["down"], event.get("flags")) for event in input_events] == [
+        (True, "command"),  # Command key down
+        (True, "command"),  # "a" down, with the Command flag set
+        (False, "command"),  # "a" up
+        (False, 0),  # Command key up, releasing it
+    ]
+
+
+def test_the_command_key_goes_back_up_even_when_posting_it_is_interrupted(input_events, monkeypatch):
     def post(event):
         input_events.append(dict(event))
         if event["down"]:
@@ -64,7 +88,9 @@ def test_a_key_goes_back_up_when_interrupted_after_key_down(input_events, monkey
     monkeypatch.setattr(macos, "_post", post)
     with pytest.raises(KeyboardInterrupt):
         macos.press("a", command=True)
-    assert input_events == [{"down": True, "flags": "command"}, {"down": False, "flags": "command"}]
+    # The interrupt lands on the Command key-down itself, so "a" is never reached, but the
+    # Command key-up in the `finally` still goes out and Command is not left held.
+    assert input_events == [{"down": True, "flags": "command"}, {"down": False, "flags": 0}]
 
 
 def test_corner_abort_stops_a_scroll_before_the_pointer_is_parked(input_events, monkeypatch):

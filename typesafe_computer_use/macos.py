@@ -80,6 +80,15 @@ def click_at(point: tuple[float, float]) -> None:
     _down_then_up(lambda down: Quartz.CGEventCreateMouseEvent(None, kinds[down], point, Quartz.kCGMouseButtonLeft))
 
 
+COMMAND_KEYCODE = 55  # kVK_Command
+
+
+def _command_key(down: bool):
+    e = Quartz.CGEventCreateKeyboardEvent(None, COMMAND_KEYCODE, down)
+    Quartz.CGEventSetFlags(e, Quartz.kCGEventFlagMaskCommand if down else 0)
+    return e
+
+
 def press(key: str, command: bool = False) -> None:
     check_abort()
     code = KEYCODES[key]
@@ -90,7 +99,17 @@ def press(key: str, command: bool = False) -> None:
             Quartz.CGEventSetFlags(e, Quartz.kCGEventFlagMaskCommand)
         return e
 
-    _down_then_up(event)
+    if not command:
+        _down_then_up(event)
+        return
+    # Command's own key carries no flag of its own; without a key-down for it, the system keeps
+    # Command held after this press and every later key and click arrives as a Command one too.
+    # Posted in a finally so an interrupted press still lets go of it.
+    try:
+        _post(_command_key(True))
+        _down_then_up(event)
+    finally:
+        _post(_command_key(False))
 
 
 def _unicode_key(ch: str, down: bool):
