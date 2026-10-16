@@ -209,11 +209,19 @@ class Field:
     y: float
     w: float
     h: float
+    subrole: str = ""
     ref: object | None = field(default=None, compare=False, repr=False)
 
     @property
     def is_text(self) -> bool:
         return self.role in TEXT_ROLES
+
+    @property
+    def is_secure(self) -> bool:
+        """A password field: never typed into. A real macOS password field reports role
+        AXTextField with subrole AXSecureTextField, which `is_text` alone cannot see. The OSWorld
+        simulation reports the role AXSecureTextField directly, with no subrole."""
+        return self.role == "AXSecureTextField" or self.subrole == "AXSecureTextField"
 
     def record(self) -> dict:
         """Everything but the opaque element handle, which no log can serialize."""

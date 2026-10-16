@@ -22,8 +22,10 @@ def calls(monkeypatch):
     return log
 
 
-def field(ref=None, value="") -> Field:
-    return Field(role="AXTextField", label="Email", placeholder="", value=value, x=10, y=20, w=200, h=30, ref=ref)
+def field(ref=None, value="", subrole="") -> Field:
+    return Field(
+        role="AXTextField", label="Email", placeholder="", value=value, x=10, y=20, w=200, h=30, subrole=subrole, ref=ref
+    )
 
 
 def test_an_item_from_the_accessibility_tree_is_pressed(screen, calls, monkeypatch):
@@ -276,6 +278,40 @@ def test_typing_uses_keystrokes_when_there_is_no_element(calls, monkeypatch):
 def test_the_field_record_leaves_the_element_out_so_a_run_can_be_written():
     record = field(ref=object(), value="hello").record()
     assert "ref" not in record and json.loads(json.dumps(record))["value"] == "hello"
+
+
+def test_is_secure_catches_a_macos_password_field_by_its_subrole():
+    """A real macOS password field reports role AXTextField with subrole AXSecureTextField; the
+    role alone never says so."""
+    secure = Field(
+        role="AXTextField", label="Password", placeholder="", value="", x=0, y=0, w=0, h=0, subrole="AXSecureTextField"
+    )
+    assert secure.is_text
+    assert secure.is_secure
+
+
+def test_is_secure_catches_an_osworld_password_field_by_its_role():
+    """The OSWorld simulation reports a password field as role AXSecureTextField directly, with no subrole."""
+    secure = Field(role="AXSecureTextField", label="Password", placeholder="", value="", x=0, y=0, w=0, h=0)
+    assert secure.is_secure
+
+
+def test_is_secure_is_false_for_an_ordinary_text_field():
+    assert not field().is_secure
+
+
+def test_type_email_refuses_a_focused_password_field(screen, calls):
+    secure = field(subrole="AXSecureTextField")
+    result = actions.perform(SimpleNamespace(chosen="type_email"), replace(screen, field=secure), [], context())
+    assert result == "type_email refused: the focused field is a password field"
+    assert calls == []
+
+
+def test_type_text_refuses_a_focused_password_field(screen, calls):
+    secure = field(subrole="AXSecureTextField")
+    result = actions.perform(SimpleNamespace(chosen="type_text"), replace(screen, field=secure), [], context(object()))
+    assert result == "type_text refused: the focused field is a password field"
+    assert calls == []
 
 
 def test_a_wait_gives_the_page_time_before_the_step_delay(monkeypatch):

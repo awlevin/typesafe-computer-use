@@ -165,6 +165,8 @@ def _use_browser(decision: Decision, screen, items, ctx: Context) -> str:
 def _type_email(decision, screen: Screen, items, ctx: Context) -> str:
     if not (screen.field and screen.field.is_text):
         return "type_email refused: no text field is focused"
+    if screen.field.is_secure:
+        return "type_email refused: the focused field is a password field"
     how = fill_field(screen.field, ctx.email or "")
     return f"typed email {how}"
 
@@ -178,6 +180,8 @@ def _type_text(decision, screen: Screen, items, ctx: Context) -> str:
     """
     if not (screen.field and screen.field.is_text):
         return "type_text refused: no text field is focused"
+    if screen.field.is_secure:
+        return "type_text refused: the focused field is a password field"
     if ctx.writer is None:
         return "type_text refused: no writer available"
     try:
